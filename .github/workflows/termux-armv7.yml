@@ -36,13 +36,26 @@ on:
         default: ''
   push:
     branches:
+      - master
+      - main
       - termux-armv7
       - termux
+    # Only rebuild when something that affects the Android build changed; a
+    # four-ABI cross build is far too expensive to run on every docs tweak.
+    paths:
+      - '.github/workflows/termux-armv7.yml'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'src/**'
+      - 'crates/**'
+      - 'build.rs'
   pull_request:
     paths:
       - '.github/workflows/termux-armv7.yml'
       - 'Cargo.toml'
       - 'Cargo.lock'
+      - 'src/**'
+      - 'crates/**'
 
 permissions:
   contents: write
