@@ -21,7 +21,14 @@ linux-compat-vendored-openssl = ["dep:native-tls", "native-tls/vendored"]
 [dependencies]
 anyhow = "1"
 chrono = "0.4"
-imap = { version = "3.0.0-alpha.15", default-features = true }
+# Termux/armv7 port: imap's "default" feature is ["native-tls"], which pulls
+# native-tls -> openssl-sys and needs a system OpenSSL for the target. There is
+# no 32-bit Android OpenSSL to link, so the cross build dies inside openssl-sys'
+# build script ("Could not find directory of OpenSSL installation"). imap's
+# "rustls-tls" feature uses rustls-connector instead, which is pure Rust + ring
+# and cross-compiles cleanly. This also matches the rest of this crate, which
+# already uses lettre's rustls backend.
+imap = { version = "3.0.0-alpha.15", default-features = false, features = ["rustls-tls"] }
 lettre = { version = "0.11.22", default-features = false, features = ["tokio1-rustls-tls", "smtp-transport", "builder"] }
 mail-parser = "0.9"
 native-tls = { version = "0.2.18", optional = true }

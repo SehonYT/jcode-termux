@@ -99,8 +99,20 @@ pub fn apply_runtime_env() -> Result<()> {
     Ok(())
 }
 
+#[cfg(not(target_os = "android"))]
 pub async fn get_bearer_token() -> Result<String> {
     jcode_azure_auth::get_bearer_token(COGNITIVE_SCOPE).await
+}
+
+/// Termux/armv7 port: `jcode-azure-auth` is not built for Android because its
+/// azure_core dependency force-selects reqwest's aws-lc-rs TLS provider, and
+/// aws-lc-sys has no 32-bit Android ARM support. Report unavailability instead
+/// of failing the build; Entra ID auth is not available on this platform.
+#[cfg(target_os = "android")]
+pub async fn get_bearer_token() -> Result<String> {
+    Err(anyhow::anyhow!(
+        "Azure Entra ID authentication is not available in Termux/armv7 builds"
+    ))
 }
 
 #[cfg(test)]

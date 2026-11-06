@@ -64,7 +64,6 @@ hex = "0.4"
 url = "2"
 open = "5"               # Open URLs in browser
 jcode-auth-types = { path = "../jcode-auth-types" }
-jcode-azure-auth = { path = "../jcode-azure-auth" }
 jcode-agent-runtime = { path = "../jcode-agent-runtime" }
 jcode-provider-metadata = { path = "../jcode-provider-metadata" }
 jcode-provider-env = { path = "../jcode-provider-env" }
@@ -146,6 +145,15 @@ embeddings = ["dep:jcode-embedding"]
 # jcode-provider-bedrock (aws-sdk); forward there. Without it the Bedrock
 # provider still compiles but live calls return an explanatory error.
 bedrock = ["jcode-provider-bedrock/aws-sdk"]
+
+# Termux/armv7 port: azure_core 1.0 hardcodes reqwest's "rustls" feature, and
+# reqwest's "rustls" is __rustls-aws-lc-rs. Cargo features are additive, so no
+# combination of features can turn that back off; the only way to keep
+# aws-lc-sys (which has no armv7-linux-androideabi support) out of the graph is
+# to not depend on azure_core at all for this target. Azure Entra ID auth is
+# dead weight on Termux, so it is compiled out there and reports unavailable.
+[target.'cfg(not(target_os = "android"))'.dependencies]
+jcode-azure-auth = { path = "../jcode-azure-auth" }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_Power", "Win32_System_ProcessStatus", "Win32_System_Registry", "Win32_System_SystemServices", "Win32_System_Threading"] }
