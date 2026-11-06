@@ -35,11 +35,13 @@ on:
         type: string
         default: ''
   push:
+    # master ONLY. master is the default branch and carries every commit. Listing
+    # extra branches that receive the SAME commits makes one push build every ABI
+    # twice - each run is ~15 minutes and uploads ~700 MB of artifacts, so this is
+    # a real cost, not a cosmetic one. Feature branches are covered by the
+    # pull_request trigger below.
     branches:
       - master
-      - main
-      - termux-armv7
-      - termux
     # Only rebuild when something that affects the Android build changed; a
     # four-ABI cross build is far too expensive to run on every docs tweak.
     paths:
