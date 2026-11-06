@@ -637,6 +637,13 @@ jobs:
     permissions:
       contents: write
     steps:
+      # The tag is derived from Cargo.toml, so this job needs the repo.
+      # It previously only downloaded artifacts and therefore could not
+      # read the version at all.
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
       - uses: actions/download-artifact@v4
         with:
           path: dist
@@ -660,7 +667,11 @@ jobs:
             # Rolling tag: every push to the default branch republishes the same
             # release, so download URLs stay stable and the newest binaries are
             # always present. Version comes from Cargo.toml, not the commit sha.
-            VER="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
+            VER="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml 2>/dev/null | head -1)"
+            if [ -z "$VER" ]; then
+              echo "::warning::could not read the version from Cargo.toml; tagging by sha"
+              VER="${GITHUB_SHA:0:7}"
+            fi
             TAG="android-v${VER}"
           fi
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
