@@ -2,6 +2,10 @@
 
 Reference documentation for the jcode codebase.
 
+> **This is the Android/Termux fork** ([SehonYT/jcode-termux](https://github.com/SehonYT/jcode-termux),
+> maintained by [@SehonYT](https://github.com/SehonYT)). Android-specific documentation lives in
+> [`docs/android/`](android/README.md) — start there for anything platform-related.
+
 ## Layout
 
 - `docs/*.md` — architecture, feature, and behavior docs (current state of the system).

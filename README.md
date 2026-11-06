@@ -1,127 +1,198 @@
 <div align="center">
 
-<p>
-<a href="https://trendshift.io/repositories/25042?utm_source=repository-badge&amp;utm_medium=badge&amp;utm_campaign=badge-repository-25042" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/repositories/25042" alt="1jehuang/jcode | Trendshift" width="250" height="55"></a>
-</p>
-
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/brand/jcode-mark-inverse.svg">
   <img src="assets/brand/jcode-mark.svg" alt="jcode halftone donut logo" width="160">
 </picture>
 
-# jcode
+# jcode for Android / Termux
 
 <p>
-  <strong>High-performance coding agents.</strong><br>
-  Run dozens of agents in parallel without melting your machine. More agents, less RAM, no lag.
+  <strong>The full jcode coding agent, running natively on Android.</strong><br>
+  Every Android ABI: 32-bit ARM, 64-bit ARM, and x86 emulators.
 </p>
 
-[![Last Commit](https://img.shields.io/github/last-commit/1jehuang/jcode/master?style=flat-square&logo=github)](https://github.com/1jehuang/jcode/commits/master)
-[![GitHub Stars](https://img.shields.io/github/stars/1jehuang/jcode?style=flat-square&logo=github)](https://github.com/1jehuang/jcode/stargazers)
-[![GitHub Downloads](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2F1jehuang%2Fjcode%2Fmaster%2Fdocs%2Fbadges%2Fdownloads.json&style=flat-square&logo=github)](https://github.com/1jehuang/jcode/releases)
-
-[![Discord](https://img.shields.io/badge/Discord-Join%20Community-5865F2?style=flat-square&logo=discord&logoColor=white)](https://discord.gg/nBe9vGyK9a)
-[![Y Combinator](https://img.shields.io/badge/Y%20Combinator-S26-F26625?style=flat-square&logo=ycombinator&logoColor=white)](https://www.ycombinator.com/companies/jcode)
-[![X (Twitter)](https://img.shields.io/badge/follow-%401jehuang-000000?style=flat-square&logo=x&logoColor=white)](https://x.com/1jehuang)
+[![Build](https://github.com/SehonYT/jcode-termux/actions/workflows/termux-armv7.yml/badge.svg)](https://github.com/SehonYT/jcode-termux/actions/workflows/termux-armv7.yml)
+[![Release](https://img.shields.io/github/v/release/SehonYT/jcode-termux?style=flat-square&label=release)](https://github.com/SehonYT/jcode-termux/releases)
+[![Fork of](https://img.shields.io/badge/fork%20of-1jehuang%2Fjcode-blue?style=flat-square)](https://github.com/1jehuang/jcode)
+[![License](https://img.shields.io/badge/license-MIT-green?style=flat-square)](LICENSE)
 
 </div>
 
-<div align="center">
+---
 
-  <a href="https://github.com/1jehuang/jcode/releases/download/readme-assets/jcode-performance-demo-2026-10.mp4">
-    <img src="https://github.com/1jehuang/jcode/releases/download/readme-assets/jcode-performance-demo-2026-10-30fps.webp" alt="jcode performance demonstration" width="900">
-  </a>
+> ### This is a fork
+>
+> **Maintained by [@SehonYT](https://github.com/SehonYT)** (KR父TAJ).
+>
+> Upstream jcode is **[1jehuang/jcode](https://github.com/1jehuang/jcode)** by Jeremy Huang, and all
+> credit for the agent itself belongs there. This fork exists for one reason: **upstream cannot run
+> on Android.** It ships x86_64 and aarch64 glibc binaries only, so the official installer fails on
+> every phone. This fork adds full Android support and maintains the Android-specific code, build
+> CI, documentation and releases.
+>
+> For anything not Android-specific, use upstream.
 
-  <p><em>jcode performance demonstration (1x speed)</em></p>
+## Install
 
-<a href="https://github.com/1jehuang/jcode/releases/download/readme-assets/jcode-yc-launch.mp4">
-  <img src="https://github.com/1jehuang/jcode/releases/download/readme-assets/jcode-yc-launch.webp" alt="jcode YC launch video" width="800">
-</a>
-
-</div>
-
-<div align="center">
-
-## Installation
-
-</div>
+On your phone, in Termux:
 
 ```bash
-# macOS & Linux
-curl -fsSL https://jcode.sh/install | bash
+curl -fsSL https://raw.githubusercontent.com/SehonYT/jcode-termux/master/scripts/install-jcode-android.sh | bash
 ```
 
-<div align="center">
+Or install a specific ABI manually from the
+[latest release](https://github.com/SehonYT/jcode-termux/releases):
 
-## Benches
+| Your device | File |
+|---|---|
+| 32-bit ARM (`armv8l`, `armeabi-v7a`) - most phones | `jcode-armv7-linux-androideabi.tar.gz` |
+| 64-bit ARM (modern phones) | `jcode-aarch64-linux-android.tar.gz` |
+| x86 emulator (32-bit) | `jcode-i686-linux-android.tar.gz` |
+| x86 emulator (64-bit) | `jcode-x86_64-linux-android.tar.gz` |
 
-</div>
+Not sure which you need?
 
-### RAM per additional session (headless)
+```bash
+getprop ro.product.cpu.abilist
+# armeabi-v7a,armeabi          -> armv7
+# arm64-v8a                    -> aarch64
+```
+
+Then run `jcode login` and start it with `jcode`.
+
+## Why upstream does not work on Android
+
+Upstream releases are built against **glibc** for desktop Linux and macOS. Android uses **bionic**
+and has no `/lib64/ld-linux-*`. The official installer’s Termux handling only patches the ELF
+interpreter for Termux glibc, and only on aarch64/x86_64 - there is no 32-bit ARM path at all.
+
+Worse, `uname -m` on a 32-bit-only phone reports `armv8l`, which *looks* 64-bit. It is not: these
+devices have an empty `ro.product.cpu.abilist64` and no `/system/bin/linker64`, so an aarch64
+binary **cannot execute at all**. The correct target is `armv7-linux-androideabi`.
+
+## What this fork adds
+
+### All Android ABIs
+Four targets build in CI on every push, each asserting its own ELF class and machine:
+
+| ABI | ELF |
+|---|---|
+| `armv7-linux-androideabi` | ELF32, Machine ARM |
+| `aarch64-linux-android` | ELF64, Machine AArch64 |
+| `i686-linux-android` | ELF32, Machine Intel 80386 |
+| `x86_64-linux-android` | ELF64, Machine x86-64 |
+
+### Features restored on Android
+- **Codemode / QuickJS** works on Android. `rquickjs-sys` ships no Android bindings, but it
+  vendors the QuickJS C source and has a `bindgen` feature that generates them at build time.
+  Enabling that restores the sandbox instead of gating it out.
+- **A working clipboard.** `arboard` has no Android backend at all, so this fork ships
+  [`jcode-clipboard`](crates/jcode-clipboard), a pure-Rust (`#![forbid(unsafe_code)]`)
+  implementation that drives Termux:API and falls back to OSC 52. Every subprocess has a hard
+  timeout, because `termux-clipboard-set` will hang forever if the Termux:API APK is missing.
+
+### Mobile hardening
+Phones have no swap: running out of memory means an instant SIGKILL, not paging. This fork caps the
+reads that could previously allocate unbounded memory - most importantly background task output,
+which is written by a shell with no size limit and was read with `read_to_string` on every
+inspection. See [`docs/android/HARDENING.md`](docs/android/HARDENING.md).
+
+### An adversarial test suite
+[`tests/mobile/`](tests/mobile) targets the failure modes that actually kill an agent on a phone:
+memory exhaustion, hangs, terminal escape injection, races, and 32-bit truncation.
+Run it with `scripts/test-mobile.sh`. Every test has a hard timeout so the suite cannot hang.
+
+## Android documentation
+
+| Document | Contents |
+|---|---|
+| [INSTALL.md](docs/android/INSTALL.md) | User guide, troubleshooting, known limitations |
+| [BUILD.md](docs/android/BUILD.md) | The four-ABI build matrix and CI |
+| [HARDENING.md](docs/android/HARDENING.md) | Mobile crash/hang/lag fixes |
+| [TESTING.md](docs/android/TESTING.md) | The adversarial test suite |
+| [CODEMODE.md](docs/android/CODEMODE.md) | How QuickJS is enabled on Android |
+| [PORT-AUDIT.md](docs/android/PORT-AUDIT.md) | Every blocker found, with evidence |
+| [TOOLCHAIN.md](docs/android/TOOLCHAIN.md) | Target/triple investigation |
+
+## Known limitations on Android
+
+- **Azure Entra ID auth** is unavailable on 32-bit ARM (`aws-lc-sys` has no armv7-Android support).
+  It works on aarch64.
+- **Image to clipboard** is unavailable; text works.
+- **Process titles** are not set, so `ps` shows a generic name.
+- **Local embeddings** are off (`--no-default-features`).
+
+## Building
+
+See [docs/android/BUILD.md](docs/android/BUILD.md). In short, CI cross-compiles with the Android
+NDK; local builds need `CARGO_BUILD_RUSTC_WRAPPER=''` and are memory-hungry.
+
+## Staying in sync with upstream
+
+```bash
+git remote add upstream https://github.com/1jehuang/jcode.git
+git fetch upstream && git merge upstream/master
+```
+
+The Android changes are confined to target gates (`cfg(target_os = "android")`), the
+`jcode-clipboard` crate, `docs/android/`, `tests/mobile/` and the CI workflow, so upstream merges
+stay small.
+
+---
+
+## Upstream jcode
+
+This fork tracks [1jehuang/jcode](https://github.com/1jehuang/jcode). Everything below is upstream’s
+own description and remains accurate for the agent itself.
+
+<details>
+<summary><strong>About jcode (upstream)</strong></summary>
+
+### Benches
+
+#### RAM per additional session (headless)
 
 | Tool | First session | Each additional session | Comparison (additional) |
 |---|---|---|---|
 | **jcode** | **71.3 MB** | **~3.3 MB** | baseline |
-| **OpenCode** | 637.1 MB | ~5.9 MB | **1.8× more RAM** |
-| **pi** | 84.0 MB | ~79.6 MB | **24.1× more RAM** |
-| **Claude Code** | 272.9 MB | ~169.3 MB | **51.3× more RAM** |
-| **Codex CLI** | 398.6 MB | ~194.1 MB | **58.8× more RAM** |
+| **OpenCode** | 637.1 MB | ~5.9 MB | **1.8x more RAM** |
+| **pi** | 84.0 MB | ~79.6 MB | **24.1x more RAM** |
+| **Claude Code** | 272.9 MB | ~169.3 MB | **51.3x more RAM** |
+| **Codex CLI** | 398.6 MB | ~194.1 MB | **58.8x more RAM** |
 
-[Reproduce](scripts/bench_headless_memory.py).
-
-### Time to first input
-
-Time until typed text appears on screen, across 10 interactive launches.
+#### Time to first input
 
 | Tool | Time to first input | Comparison |
 |---|---|---|
 | **jcode** | **19.1 ms** | baseline |
-| **pi** | 596.4 ms | **31.2× slower** |
-| **Codex CLI** | 905.8 ms | **47.4× slower** |
-| **OpenCode** | 1047.9 ms | **54.9× slower** |
-| **Claude Code** | 3512.8 ms | **183.9× slower** |
+| **pi** | 596.4 ms | **31.2x slower** |
+| **Codex CLI** | 905.8 ms | **47.4x slower** |
+| **OpenCode** | 1047.9 ms | **54.9x slower** |
+| **Claude Code** | 3512.8 ms | **183.9x slower** |
 
-Full numbers on [jcode.sh](https://jcode.sh).
+### Swarm
 
-<div align="center">
+Spawn two or more agents in the same repo and the server manages collaboration between them: when
+agent A edits a file agent B has read, B is notified so it can check the diff for conflicts. Agents
+can message one agent, broadcast to all agents in a repo, or spawn their own sub-swarms.
 
-## Screenshots
+### OAuth and providers
 
-[Browse the interactive gallery on jcode.sh](https://jcode.sh/#screenshots).
+Supports a wide range of providers including Claude OAuth and OpenAI Codex OAuth. See the
+[upstream docs](https://jcode.sh/docs#providers).
 
-<table>
-  <tr>
-    <td align="center"><a href="https://jcode.sh/screenshots/inline-image-rendering.webp"><img src="https://jcode.sh/screenshots/thumbs/inline-image-rendering.webp" alt="Jcode rendering screenshots inline after reading image files" width="440" /></a><br>Inline images</td>
-    <td align="center"><a href="https://jcode.sh/screenshots/resume-menu.webp"><img src="https://jcode.sh/screenshots/thumbs/resume-menu.webp" alt="Jcode resume menu with a session list and preview" width="440" /></a><br>Resume menu</td>
-  </tr>
-  <tr>
-    <td align="center"><a href="https://jcode.sh/screenshots/latex-math-rendering.webp"><img src="https://jcode.sh/screenshots/thumbs/latex-math-rendering.webp" alt="Jcode rendering LaTeX mathematics inline" width="440" /></a><br>Inline LaTeX</td>
-    <td align="center"><a href="https://jcode.sh/screenshots/cache-cold-notification.webp"><img src="https://jcode.sh/screenshots/thumbs/cache-cold-notification.webp" alt="Jcode warning that the prompt cache went cold" width="440" /></a><br>Cache cold notification</td>
-  </tr>
-</table>
+### Self-dev
 
-</div>
+jcode can modify its own source, rebuild, reload its binary and continue work across sessions.
 
-## Swarm
+Links: [Token optimization](docs/HARNESS.md#token-optimization) ·
+[KV cache](docs/HARNESS.md#kv-cache) ·
+[Upstream repository](https://github.com/1jehuang/jcode)
 
-Spawn two or more agents in the same repo, and they will automatically be managed by the server to allow native collaboration. When agent A edits a file that agent B has read (code shifting under its feet), the server notifies agent B. Agent B can ignore it if it is not relevant, or it can check the diff to make sure that it doesn't conflict. Each agent has messaging abilities, capable of DMing just one agent, broadcasting to all other agents hosted by the server, or just agents working in that repo. This allows you to spawn multiple sessions in the same repo, and have all conflicts automatically resolved.
+</details>
 
-Agents are also able to spawn their own swarms autonomously. They have a swarm tool which allows them to spawn in their own teamates to accomplish tasks in parallel. Doing so turns the main agent into a coordinator and the spawned agents into workers. Groups of agents, their messaging channels, their completion statuses, etc are all automatically managed. This can be done headlessly or headed.
+## License
 
-
-## OAuth and Providers
-
-Supports a [wide range of providers](https://jcode.sh/docs#providers), including Claude OAuth and OpenAI Codex OAuth.
-
-## Customizability / Self-Dev
-
-Jcode is inventing a new form of customizability. One that doesn't limit you to what a plugin or extension can do. Tell your jcode agent to enter self dev mode, and it will start modifying its own source code. Jcode is optimized to iterate on itself. There is significant infrastructure around self development, which allows it to edit, build, and test its own source code, then reload its own binary and continue work in your (potentially many) sessions, fully automatically.
-
-
-<!-- Add self-dev demo thumbnail/video and fuller writeup here. -->
-
-## Other
-
-- [Token optimization](docs/HARNESS.md#token-optimization)
-- [KV cache](docs/HARNESS.md#kv-cache)
-- [Hill-climbable measurements](docs/HARNESS.md#hill-climbable-measurements)
+MIT, inherited from [1jehuang/jcode](https://github.com/1jehuang/jcode).
+Original copyright (c) 2025 Jeremy Huang. Android port additions (c) 2026 KR父TAJ (@SehonYT).

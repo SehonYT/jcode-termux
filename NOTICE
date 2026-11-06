@@ -1,0 +1,48 @@
+jcode-termux
+============
+
+Android / Termux port of jcode.
+
+This repository is a FORK of jcode:
+
+    Upstream:    https://github.com/1jehuang/jcode
+    Upstream (c) 2025 Jeremy Huang
+
+    Fork:        https://github.com/SehonYT/jcode-termux
+    Fork (c) 2026 KR父TAJ (@SehonYT) - Android/Termux port
+
+
+WHAT THE FORK ADDS
+------------------
+
+All Android-specific work in this repository is by @SehonYT unless otherwise
+noted. It covers:
+
+  * Build support for every Android ABI: armv7-linux-androideabi,
+    aarch64-linux-android, i686-linux-android, x86_64-linux-android.
+  * Removal of dependencies with no Android support (aws-lc-sys, onig_sys,
+    openssl-sys via native-tls, arboard).
+  * crates/jcode-clipboard - a new pure-Rust clipboard implementation, because
+    arboard excludes Android in its own source.
+  * Re-enabling the QuickJS/codemode sandbox on Android via rquickjs-sys'
+    "bindgen" feature.
+  * Mobile hardening (bounded reads, subprocess timeouts).
+  * tests/mobile/ - an adversarial test suite for phone failure modes.
+  * .github/workflows/termux-armv7.yml - the four-ABI build CI.
+  * docs/android/ - port documentation.
+
+
+WHAT REMAINS UPSTREAM'S WORK
+-----------------------------
+
+Essentially all of jcode: the agent, the TUI, the harness, the provider
+integrations, the swarm, and the upstream documentation. Credit belongs to the
+upstream authors. Please report non-Android issues upstream.
+
+
+LICENSE
+-------
+
+MIT, inherited unchanged from upstream. See LICENSE.
+The original copyright notice (c) 2025 Jeremy Huang is preserved in full, as the
+MIT license requires.

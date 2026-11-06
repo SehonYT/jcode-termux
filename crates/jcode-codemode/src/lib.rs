@@ -27,7 +27,7 @@ mod engine;
 /// where rquickjs-sys has no pregenerated binding and FreeBSD CI provisions no
 /// libclang. On Android the engine IS built: rquickjs-sys vendors the QuickJS C
 /// source and its "bindgen" feature generates bindings for any target (see the
-/// dependency comment in Cargo.toml and docs/ANDROID-CODEMODE.md).
+/// dependency comment in Cargo.toml and docs/android/CODEMODE.md).
 pub const AVAILABLE: bool = cfg!(not(target_os = "freebsd"));
 
 /// A tool the script may call through `tools.<name>(args)`.

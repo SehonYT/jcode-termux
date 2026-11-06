@@ -136,8 +136,8 @@ feature chains.
 
 ## Notes for maintainers
 
-See [`docs/AUDIT.md`](docs/AUDIT.md) for the full blocker analysis with file:line references,
-and [`docs/TOOLCHAIN.md`](docs/TOOLCHAIN.md) for the toolchain investigation.
+See [PORT-AUDIT.md](PORT-AUDIT.md) for the full blocker analysis with file:line references,
+and [TOOLCHAIN.md](TOOLCHAIN.md) for the toolchain investigation.
 
 One trap worth repeating: `.cargo/config.toml` sets `rustc-wrapper` to
 `scripts/rustc-parallel-frontend`, which injects `RUSTC_BOOTSTRAP=1` and the nightly-only

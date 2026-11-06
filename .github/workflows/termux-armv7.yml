@@ -17,7 +17,7 @@ name: Termux / Android (all ABIs)
 # registry crates locally is not viable there. GitHub-hosted ubuntu-latest is
 # x86_64 with 16 GB RAM and a fast network.
 #
-# See docs/BUILD.md for the ABI matrix and docs/TERMUX.md for the device story.
+# See docs/android/BUILD.md for the ABI matrix and docs/android/INSTALL.md for the device story.
 
 on:
   workflow_dispatch:
