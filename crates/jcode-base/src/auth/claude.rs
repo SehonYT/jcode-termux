@@ -783,8 +783,19 @@ fn read_claude_code_keychain_blob() -> Option<String> {
                 if !status.success() {
                     return None;
                 }
+                // Cap the read. This is a child process we do not control, and
+                // on Android a runaway or misbehaving helper can emit output
+                // without bound; an uncapped read_to_string would allocate all
+                // of it and get the process SIGKILLed by the low-memory killer.
+                // A Keychain credential blob is tiny, so 1 MiB is far above any
+                // legitimate response while still bounding the worst case.
+                const MAX_CREDENTIAL_READ_BYTES: u64 = 1024 * 1024;
                 let mut out = String::new();
-                child.stdout.take()?.read_to_string(&mut out).ok()?;
+                let stdout = child.stdout.take()?;
+                stdout
+                    .take(MAX_CREDENTIAL_READ_BYTES)
+                    .read_to_string(&mut out)
+                    .ok()?;
                 let trimmed = out.trim();
                 if trimmed.is_empty() {
                     return None;

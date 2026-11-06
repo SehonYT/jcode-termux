@@ -91,12 +91,13 @@ jobs will exhaust RAM on a phone.
 ## Building in CI
 
 The cross-compile lives in
-[`.github/workflows/termux-armv7.yml`](.github/workflows/termux-armv7.yml). It:
+[`.github/workflows/termux-armv7.yml`](.github/workflows/termux-armv7.yml) and now builds
+**all four Android ABIs** — see [BUILD.md](BUILD.md) for the full matrix. It:
 
 1. **Gate 1 — dependency graph audit.** Fails fast if any crate known to be unbuildable
-   for 32-bit Android ARM is reachable, before spending 20+ minutes compiling.
+   for Android is reachable, before spending 20+ minutes compiling.
 2. **Gate 2 — cross build** with the Android NDK, `--no-default-features`, then asserts the
-   artifact really is `ELF 32-bit ... ARM` (and explicitly fails on `aarch64`).
+   artifact really is the requested `class`/`machine` (and explicitly fails on a mismatch).
 
 ## What was changed for this port
 

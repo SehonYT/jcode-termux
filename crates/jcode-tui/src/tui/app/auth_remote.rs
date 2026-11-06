@@ -401,13 +401,20 @@ impl App {
             if code == KeyCode::Char('v')
                 && modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::SUPER)
             {
-                // Termux/armv7 port: arboard is not built for Android, so SSH
-                // login paste is unavailable there (no OSC 52 read path).
+                // Termux/armv7 port: arboard is not built for Android.
                 #[cfg(not(target_os = "android"))]
                 if let Ok(mut clipboard) = arboard::Clipboard::new()
                     && let Ok(text) = clipboard.get_text()
                 {
                     self.append_ssh_login_input(&text);
+                }
+                // Termux/armv7 port: Android reads through Termux:API. There is
+                // no OSC 52 *read* path, so without the addon this is simply
+                // unavailable; the typed error is ignored because a paste key
+                // must never turn into an error notice in the login picker.
+                #[cfg(target_os = "android")]
+                if let Ok(clipboard_text) = jcode_clipboard::Clipboard::new().get_text() {
+                    self.append_ssh_login_input(&clipboard_text);
                 }
                 return true;
             }
@@ -448,6 +455,10 @@ impl App {
                     && let Ok(text) = clipboard.get_text()
                 {
                     self.append_ssh_login_input(&text);
+                }
+                #[cfg(target_os = "android")]
+                if let Ok(clipboard_text) = jcode_clipboard::Clipboard::new().get_text() {
+                    self.append_ssh_login_input(&clipboard_text);
                 }
             }
             KeyCode::Backspace => {

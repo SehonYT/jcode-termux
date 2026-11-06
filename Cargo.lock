@@ -1035,6 +1035,8 @@ dependencies = [
  "cexpr",
  "clang-sys",
  "itertools 0.13.0",
+ "log",
+ "prettyplease",
  "proc-macro2",
  "quote",
  "regex",
@@ -1559,6 +1561,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "convert_case"
+version = "0.12.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1af709f1f33454bf52eadfc8c78b3b9ef9cb26fb54d16dc9cd9a7299f899fd1b"
+dependencies = [
+ "unicode-segmentation",
+]
+
+[[package]]
 name = "cookie"
 version = "0.18.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2076,7 +2087,7 @@ version = "2.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "799a97264921d8623a957f6c3b9011f3b5492f557bbb7a5a19b7fa6d06ba8dcb"
 dependencies = [
- "convert_case",
+ "convert_case 0.10.0",
  "proc-macro2",
  "quote",
  "rustc_version",
@@ -3861,6 +3872,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "jcode-clipboard"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "libc",
+ "tempfile",
+]
+
+[[package]]
 name = "jcode-codemode"
 version = "0.1.0"
 dependencies = [
@@ -4686,6 +4706,7 @@ dependencies = [
  "image",
  "jcode-app-core",
  "jcode-build-meta",
+ "jcode-clipboard",
  "jcode-config-types",
  "jcode-core",
  "jcode-fuzzy",
@@ -7513,6 +7534,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a0a22bf72f515cc4189dd7c63d016f6de92a11eee98ddf7dd64794198f6eb34e"
 dependencies = [
  "rquickjs-core",
+ "rquickjs-macro",
 ]
 
 [[package]]
@@ -7528,11 +7550,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "rquickjs-macro"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0a2ea9adb03b669c933482ff740b683cd36be7cef23891657a8ccb850401d286"
+dependencies = [
+ "convert_case 0.12.0",
+ "indexmap",
+ "proc-macro-crate",
+ "proc-macro2",
+ "quote",
+ "rquickjs-core",
+ "syn 3.0.3",
+]
+
+[[package]]
 name = "rquickjs-sys"
 version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cee271d0eeba64f0915b846cb7ae02e16faf3dfdffdca91731101d9d30fe3423"
 dependencies = [
+ "bindgen",
  "cc",
 ]
 

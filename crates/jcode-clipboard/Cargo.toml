@@ -1,0 +1,35 @@
+[package]
+name = "jcode-clipboard"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Terminal-native clipboard for jcode, with a real Android backend (Termux:API + OSC 52)."
+license = "MIT"
+
+# Termux/armv7 port: this crate is the Android replacement for `arboard`.
+# Upstream arboard excludes Android in its own source
+# (src/platform/mod.rs: `not(any(target_os = "macos", target_os = "android", ...))`),
+# so on target_os = "android" its `platform` module is empty and the crate
+# cannot even name `arboard::Clipboard`. Android has no X11, Wayland, Win32 or
+# NSPasteboard anyway; the only mechanisms that exist on a phone are
+# Termux:API's `termux-clipboard-get/set` and OSC 52 escape sequences. This
+# crate implements both, with hard subprocess timeouts, and keeps the
+# wl-copy/xclip/xsel ordering for desktop Linux.
+
+[lib]
+name = "jcode_clipboard"
+path = "src/lib.rs"
+
+[dependencies]
+# Base64 for the OSC 52 payload (and for image payloads). Same version every
+# other crate in the workspace uses, so the lockfile stays single-versioned.
+base64 = "0.22"
+
+[dev-dependencies]
+tempfile = "3"
+
+# Test-only stubs for the external Android clipboard helpers. These let the
+# `#[cfg(test)]` probes exercise the real `std::process` path on a desktop
+# host instead of only the fake runner.
+[target.'cfg(unix)'.dev-dependencies]
+libc = "0.2"

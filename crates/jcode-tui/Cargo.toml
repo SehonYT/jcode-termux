@@ -89,6 +89,17 @@ jcode-terminal-prompt = { path = "../jcode-terminal-prompt" }
 jcode-voice = { path = "../jcode-voice" }
 jcode-productivity-core = { path = "../jcode-productivity-core" }
 jcode-tui-workspace = { path = "../jcode-tui-workspace" }
+# Termux/armv7 port: the Android clipboard bridge, replacing `arboard` on
+# `target_os = "android"` (arboard declares no backend there at all - see the
+# note on `arboard` below). Android's only clipboard mechanisms are
+# Termux:API's `termux-clipboard-get/set` binaries and OSC 52 escape
+# sequences; `jcode-clipboard` implements both with a hard 2s timeout on every
+# subprocess (the Termux:API helper blocks forever when the companion APK is
+# missing, which is the common case) and returns typed errors instead of
+# panicking. Declared unconditionally, like the other leaf helpers: it is tiny
+# and pure Rust, and being a normal dependency means its tests also build in
+# this crate's test target.
+jcode-clipboard = { path = "../jcode-clipboard" }
 
 [features]
 default = ["pdf", "bedrock"]
@@ -118,9 +129,9 @@ jcode-app-core = { path = "../jcode-app-core", default-features = false, feature
 # are Windows / macOS / X11-Wayland only, so on target_os = "android" the
 # `platform` module is empty and arboard fails with "cannot find `Clipboard` in
 # `platform`". Termux has no X11, Wayland, Win32 or NSPasteboard either, so
-# arboard could never work here anyway. The clipboard falls back to OSC 52
-# (copy_to_clipboard_osc52), which is the correct mechanism for Terminal/Termux
-# and is already the documented remote-session fallback in helpers.rs.
+# arboard could never work here anyway. Windows/macOS/Linux keep arboard (its
+# native API is the only authoritative one on conhost/Terminal.app, issues
+# #497/#504); Android uses `jcode-clipboard` instead.
 [target.'cfg(not(target_os = "android"))'.dependencies]
 arboard = "3"
 

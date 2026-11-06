@@ -1007,3 +1007,130 @@ async fn disarm_stall_watchdog_clears_state() -> Result<()> {
     manager.cancel(&info.task_id).await?;
     Ok(())
 }
+
+/// A background task's output file is written by a shell with no size limit, so
+/// every reader in this module must be bounded. Before the cap existed, the
+/// "inspect a background task" paths (`bg output`, `bg wait`, completion
+/// notifications) called `read_to_string` on the whole file and allocated
+/// however much the task had emitted — a one-line OOM kill on a phone.
+///
+/// These pin the reader's contract directly, because the failure it prevents is
+/// only observable as a process death on a large file.
+mod capped_output_reads {
+    use super::*;
+    use std::io::Write;
+
+    /// The cap must bound the allocation regardless of file size.
+    #[test]
+    fn reader_never_returns_more_than_the_cap() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("big.output");
+        // 3x the cap: unbounded behaviour would return 3x this many bytes.
+        let line = format!("{}\n", "x".repeat(1023));
+        {
+            let mut file = std::fs::File::create(&path).unwrap();
+            for _ in 0..(3 * 1024) {
+                file.write_all(line.as_bytes()).unwrap();
+            }
+            file.flush().unwrap();
+        }
+        let total = std::fs::metadata(&path).unwrap().len();
+        let cap = 1024 * 1024; // 1 MiB, smaller than the file
+        let text = read_file_tail_capped_with_limit(&path, cap).expect("read");
+        assert!(
+            text.len() as u64 <= cap,
+            "read {} bytes from a {} byte file with a {} byte cap",
+            text.len(),
+            total,
+            cap
+        );
+        assert!(total > cap, "fixture must exceed the cap to be meaningful");
+    }
+
+    /// Truncation takes the *tail*: the exit-code marker a detached command
+    /// writes lives at the end of the file, so reading the head would lose the
+    /// exit status of every long-running background task.
+    #[test]
+    fn truncation_keeps_the_exit_marker_at_the_end() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("marker.output");
+        let filler = format!("{}\n", "y".repeat(1023));
+        {
+            let mut file = std::fs::File::create(&path).unwrap();
+            for _ in 0..2048 {
+                file.write_all(filler.as_bytes()).unwrap();
+            }
+            file.write_all(b"\n--- Command finished with exit code: 7 ---\n")
+                .unwrap();
+            file.flush().unwrap();
+        }
+        let text = read_file_tail_capped_with_limit(&path, 64 * 1024).expect("read");
+        assert_eq!(
+            BackgroundTaskManager::parse_exit_code_from_output(&text),
+            Some(7),
+            "the tail must still carry the exit-code marker"
+        );
+    }
+
+    /// A truncated read must not surface half a line, because callers render
+    /// the first line they see (progress parsing, previews).
+    #[test]
+    fn truncated_read_drops_the_partial_first_line() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("partial.output");
+        std::fs::write(&path, b"aaaa\nbbbb\ncccc\ndddd\n").unwrap();
+        // Cap lands inside the "cccc" line.
+        let text = read_file_tail_capped_with_limit(&path, 11).expect("read");
+        assert!(
+            !text.starts_with("cc"),
+            "partial line leaked into the read: {text:?}"
+        );
+        assert!(text.ends_with("dddd\n"), "tail must be intact: {text:?}");
+    }
+
+    /// Small files are returned whole: the cap must not truncate normal output.
+    #[test]
+    fn small_files_are_returned_whole() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("small.output");
+        std::fs::write(&path, b"hello\nworld\n").unwrap();
+        assert_eq!(
+            read_file_tail_capped(&path).as_deref(),
+            Some("hello\nworld\n")
+        );
+    }
+
+    /// A missing output file is a normal state (task cleaned up), not an error.
+    #[test]
+    fn missing_file_reads_as_none() {
+        let dir = tempdir().unwrap();
+        assert!(read_file_tail_capped(&dir.path().join("nope.output")).is_none());
+    }
+
+    /// End-to-end: reading a task's output through the public accessor is
+    /// bounded, no matter how much the task wrote.
+    #[tokio::test]
+    async fn manager_output_accessor_is_bounded() {
+        let dir = tempdir().unwrap();
+        let manager = BackgroundTaskManager::with_output_dir(dir.path().into());
+        let info = manager.reserve_task_info();
+        let filler = format!("{}\n", "z".repeat(4095));
+        {
+            let mut file = std::fs::File::create(&info.output_file).unwrap();
+            for _ in 0..2048 {
+                file.write_all(filler.as_bytes()).unwrap();
+            }
+            file.flush().unwrap();
+        }
+        let total = std::fs::metadata(&info.output_file).unwrap().len();
+        let read = manager.output(&info.task_id).await.expect("output");
+        assert!(
+            read.len() as u64 <= MAX_BACKGROUND_OUTPUT_READ_BYTES,
+            "output accessor returned {} bytes for a {} byte file",
+            read.len(),
+            total
+        );
+        assert!(total > MAX_BACKGROUND_OUTPUT_READ_BYTES);
+    }
+}
+

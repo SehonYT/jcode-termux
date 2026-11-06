@@ -175,11 +175,14 @@ fn read_clipboard_text() -> Option<String> {
     }
 
     // Termux/armv7 port: arboard is not built for Android (no X11, Wayland,
-    // Win32 or NSPasteboard). There is no clipboard-read path on Termux, so
-    // report that no text is available rather than failing to compile.
+    // Win32 or NSPasteboard). `jcode-clipboard` reads Android's real clipboard
+    // through Termux:API's `termux-clipboard-get`, which is the only read path
+    // that exists on a phone - there is no OSC 52 read sequence. When the
+    // addon is not installed it returns a typed error and we report "no text",
+    // which is what the caller already handles for an unavailable clipboard.
     #[cfg(target_os = "android")]
     {
-        None
+        jcode_clipboard::Clipboard::new().get_text().ok()
     }
     #[cfg(not(target_os = "android"))]
     {

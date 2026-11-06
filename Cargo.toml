@@ -97,6 +97,9 @@ members = [
     "crates/jcode-telemetry-core",
     "crates/jcode-tui-workspace",
     "crates/jcode-render-core",
+    # Termux/armv7 port: the Android clipboard bridge that replaces `arboard`
+    # on `target_os = "android"` (arboard excludes Android in its own source).
+    "crates/jcode-clipboard",
 ]
 
 [lib]
@@ -217,6 +220,31 @@ jcode-selfdev-types = { path = "crates/jcode-selfdev-types" }
 
 # Archive extraction (for auto-update)
 tempfile = "3"
+
+# ---------------------------------------------------------------------------
+# Mobile / Android adversarial test suites.
+#
+# Cargo only auto-discovers tests/*.rs, not tests/<dir>/*.rs, so these are
+# declared explicitly. They exercise the real CLI binary as a subprocess under
+# hard timeouts, targeting the failure modes that actually kill a coding agent
+# on a phone: OOM, hangs, terminal escape injection, races, and 32-bit
+# truncation. See docs/TESTING-MOBILE.md and scripts/test-mobile.sh.
+# ---------------------------------------------------------------------------
+[[test]]
+name = "mobile_resource_exhaustion"
+path = "tests/mobile/resource_exhaustion.rs"
+
+[[test]]
+name = "mobile_hang_and_injection"
+path = "tests/mobile/hang_and_injection.rs"
+
+[[test]]
+name = "mobile_concurrency"
+path = "tests/mobile/concurrency.rs"
+
+[[test]]
+name = "mobile_thirtytwo_bit"
+path = "tests/mobile/thirtytwo_bit.rs"
 
 [features]
 # Memory recall uses Jev Decisions and needs no local inference stack.

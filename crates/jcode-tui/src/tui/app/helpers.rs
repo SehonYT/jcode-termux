@@ -495,14 +495,29 @@ pub(super) fn copy_to_clipboard(text: &str) -> bool {
             }
             // Termux/armv7 port: arboard has no Android backend (Termux has no
             // X11, Wayland, Win32 or NSPasteboard), so it is not built there.
-            // OSC 52 is the correct clipboard mechanism for a terminal
-            // emulator and is what this branch falls back to anyway.
             #[cfg(not(target_os = "android"))]
             if arboard::Clipboard::new()
                 .and_then(|mut cb| cb.set_text(text.to_string()))
                 .is_ok()
             {
                 return true;
+            }
+            // Termux/armv7 port: on Android try Termux:API first. It writes
+            // Android's *real* ClipboardManager, so the text is visible to
+            // every other app on the phone - a strictly better outcome than
+            // OSC 52, which only works if the terminal implements it. The
+            // helper is absent on most installs (no addon), in which case
+            // `set_text` returns NoMechanism and we fall through to OSC 52.
+            #[cfg(target_os = "android")]
+            {
+                let clipboard = jcode_clipboard::Clipboard::new();
+                if clipboard.set_text(text).is_ok() {
+                    return true;
+                }
+                // A *failure* (helper present but refused: revoked permission,
+                // dismissed dialog) still falls through to OSC 52 below, but
+                // the crate records the reason so the status line can say so
+                // instead of claiming an unconditional success.
             }
             copy_to_clipboard_osc52(text)
         }
@@ -515,17 +530,17 @@ pub(super) fn copy_to_clipboard(text: &str) -> bool {
 /// (with `set -g set-clipboard on`). Returns false if stdout is not a TTY.
 #[cfg_attr(test, allow(dead_code))]
 fn copy_to_clipboard_osc52(text: &str) -> bool {
-    use base64::Engine as _;
-    use std::io::{IsTerminal, Write};
+    use std::io::IsTerminal;
 
-    let mut out = std::io::stdout();
-    if !out.is_terminal() {
-        return false;
-    }
-    let encoded = base64::engine::general_purpose::STANDARD.encode(text.as_bytes());
-    // OSC 52: ESC ] 52 ; c ; <base64> BEL
-    let seq = format!("\x1b]52;c;{}\x07", encoded);
-    out.write_all(seq.as_bytes()).is_ok() && out.flush().is_ok()
+    let out = std::io::stdout();
+    let is_tty = out.is_terminal();
+    // Termux/armv7 port: the base64 framing lives in `jcode-clipboard` so the
+    // Android backend and this fallback cannot drift apart. On Android the
+    // call also records "Termux:API failed, OSC 52 used" for the status line.
+    let mut out = out;
+    jcode_clipboard::Clipboard::new()
+        .write_osc52(&mut out, is_tty, text)
+        .is_ok()
 }
 
 pub(crate) fn effort_display_label(effort: &str) -> &str {
@@ -1088,31 +1103,32 @@ pub(super) fn copy_image_to_clipboard(media_type: &str, base64_data: &str) -> bo
             return true;
         }
     }
-    let Ok(decoded) = image::load_from_memory_with_format(
-        &bytes,
-        match media_type {
-            "image/jpeg" => image::ImageFormat::Jpeg,
-            "image/gif" => image::ImageFormat::Gif,
-            "image/webp" => image::ImageFormat::WebP,
-            _ => image::ImageFormat::Png,
-        },
-    ) else {
-        return false;
-    };
-    let rgba = decoded.to_rgba8();
-    let (width, height) = rgba.dimensions();
     // Termux/armv7 port: arboard has no Android backend, so image-to-clipboard
-    // is unavailable there. The Wayland path above and OSC 52 (text only) are
-    // the alternatives; returning false lets the caller report that copy failed
-    // rather than claiming success.
+    // is unavailable there. Neither Termux:API nor OSC 52 carries image bytes,
+    // so there is nothing to fall back to. Refuse *before* decoding: the RGBA
+    // buffer below is several times the PNG's size and would be pure waste on
+    // a phone with ~1.4 GB free.
     #[cfg(target_os = "android")]
     {
-        let _ = (rgba, width, height);
-        false
+        return jcode_clipboard::Clipboard::new()
+            .set_image(media_type, &bytes)
+            .is_ok();
     }
     #[cfg(not(target_os = "android"))]
     {
-        let _ = (width, height);
+        let Ok(decoded) = image::load_from_memory_with_format(
+            &bytes,
+            match media_type {
+                "image/jpeg" => image::ImageFormat::Jpeg,
+                "image/gif" => image::ImageFormat::Gif,
+                "image/webp" => image::ImageFormat::WebP,
+                _ => image::ImageFormat::Png,
+            },
+        ) else {
+            return false;
+        };
+        let rgba = decoded.to_rgba8();
+        let (width, height) = rgba.dimensions();
         arboard::Clipboard::new()
             .and_then(|mut clipboard| {
                 clipboard.set_image(arboard::ImageData {

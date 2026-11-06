@@ -146,10 +146,19 @@ fn copy_image_xclip(path: &Path) -> bool {
 }
 
 #[cfg(target_os = "android")]
-fn copy_image_arboard(_png: &[u8]) -> bool {
+fn copy_image_arboard(png: &[u8]) -> bool {
     // Termux/armv7 port: arboard is not built for Android (no X11, Wayland,
     // Win32 or NSPasteboard), so there is no image-clipboard backend here.
-    false
+    //
+    // Routed through `jcode-clipboard` rather than returning a bare `false`:
+    // the crate returns a typed `Unsupported` that names the reason ("Android
+    // exposes text only"), and going through it keeps the Android clipboard
+    // decision in one place. Neither Termux:API nor OSC 52 carries image
+    // bytes, so this cannot succeed - the caller's existing "Could not access
+    // the clipboard; share the file directly." path is the correct outcome.
+    jcode_clipboard::Clipboard::new()
+        .set_image("image/png", png)
+        .is_ok()
 }
 
 #[cfg(not(target_os = "android"))]

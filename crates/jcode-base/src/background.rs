@@ -32,6 +32,58 @@ use model::{
     progress_event_record, progress_wait_reason, push_task_event, task_dir, terminal_event_record,
 };
 
+/// Hard ceiling on how much of a background task's output file is pulled into
+/// memory at once.
+///
+/// A background task's output file is written by a shell with no size limit
+/// (`yes`, a runaway build log, or a stuck network client can produce gigabytes
+/// in minutes). Every reader below used to slurp the whole file with
+/// `fs::read_to_string`, so merely *inspecting* such a task — the common
+/// "bg action=output", "bg action=wait" and completion-notification paths — could
+/// allocate the entire file and get the process SIGKILLed by Android's low-memory
+/// killer. Nothing in those paths needs the whole file: they render a bounded
+/// tail (`output_preview`, 50 KB / N lines) or scan for the exit-code marker the
+/// wrapper appends at the very end of the file.
+///
+/// Readers must therefore read the *tail* of the file rather than the head.
+/// Callers that still need the head (full `output` actions) are capped here too:
+/// returning a truncated tail is strictly better on a phone than dying.
+pub(crate) const MAX_BACKGROUND_OUTPUT_READ_BYTES: u64 = 4 * 1024 * 1024;
+
+/// Read at most the last [`MAX_BACKGROUND_OUTPUT_READ_BYTES`] of a file as
+/// UTF-8 text, regardless of how large the file has grown.
+///
+/// Returns `None` when the file does not exist or cannot be read. When the file
+/// is larger than the cap the head is skipped, so callers see a bounded tail;
+/// a leading partial line is trimmed so these reads never surface half a line
+/// (the same rule `read_file_tail_text` uses for external transcripts).
+pub(crate) fn read_file_tail_capped(path: &std::path::Path) -> Option<String> {
+    read_file_tail_capped_with_limit(path, MAX_BACKGROUND_OUTPUT_READ_BYTES)
+}
+
+pub(crate) fn read_file_tail_capped_with_limit(
+    path: &std::path::Path,
+    max_bytes: u64,
+) -> Option<String> {
+    use std::io::{Read, Seek, SeekFrom};
+
+    let mut file = std::fs::File::open(path).ok()?;
+    let len = file.metadata().ok()?.len();
+    let truncated = len > max_bytes;
+    if truncated {
+        file.seek(SeekFrom::Start(len - max_bytes)).ok()?;
+    }
+    let mut bytes = Vec::with_capacity(max_bytes.min(len) as usize + 1);
+    // `take` bounds the read even if the file grows after the metadata call — a
+    // live background task is appending the whole time.
+    (&mut file).take(max_bytes).read_to_end(&mut bytes).ok()?;
+    let mut text = String::from_utf8_lossy(&bytes).into_owned();
+    if truncated && let Some(newline) = text.find('\n') {
+        text.drain(..=newline);
+    }
+    Some(text)
+}
+
 /// Manages background task execution
 pub struct BackgroundTaskManager {
     tasks: Arc<RwLock<HashMap<String, RunningTask>>>,
@@ -168,7 +220,7 @@ impl BackgroundTaskManager {
         }
 
         let output_path = self.output_path_for(&status.task_id);
-        let output = fs::read_to_string(&output_path).await.unwrap_or_default();
+        let output = read_file_tail_capped(&output_path).unwrap_or_default();
         let exit_code = reaped_exit.or_else(|| Self::parse_exit_code_from_output(&output));
         let completed_at = Utc::now();
         let duration_secs = Self::status_duration_secs(&status.started_at, completed_at);
@@ -293,7 +345,7 @@ impl BackgroundTaskManager {
         self.write_status_file(status_path, &status).await;
 
         let output_path = self.output_path_for(&status.task_id);
-        let output = fs::read_to_string(&output_path).await.unwrap_or_default();
+        let output = read_file_tail_capped(&output_path).unwrap_or_default();
         let output_preview = if output.len() > 500 {
             format!("{}...", crate::util::truncate_str(&output, 500))
         } else {
@@ -572,9 +624,10 @@ impl BackgroundTaskManager {
             let _ = registered_rx.await;
             tasks_for_prune.write().await.remove(&task_id_clone);
 
-            // Read output preview for notification
-            let output_preview = tokio::fs::read_to_string(&output_path_clone)
-                .await
+            // Read output preview for notification. Bounded to the file tail:
+            // a background task can emit far more output than a phone can hold,
+            // and only the last 500 bytes are ever shown.
+            let output_preview = read_file_tail_capped(&output_path_clone)
                 .map(|s| {
                     if s.len() > 500 {
                         format!("{}...", crate::util::truncate_str(&s, 500))
@@ -891,10 +944,28 @@ impl BackgroundTaskManager {
         tasks.contains_key(task_id)
     }
 
-    /// Get full output of a task
+    /// Get a task's output, bounded to the tail of the file.
+    ///
+    /// This is the accessor behind `bg action=output` and `bg action=wait`.
+    /// It used to read the whole file, so a task whose output file had grown to
+    /// hundreds of megabytes (a runaway log, `yes`, a chatty build) allocated
+    /// that much before the caller applied its own 50 KB / N-line preview
+    /// truncation — on a phone that is an OOM kill for a value that is then
+    /// thrown away. See [`MAX_BACKGROUND_OUTPUT_READ_BYTES`].
+    ///
+    /// To read the pristine full output, use the `read` tool on the task's
+    /// output file, which streams with its own bounds.
     pub async fn output(&self, task_id: &str) -> Option<String> {
+        self.output_capped(task_id).await
+    }
+
+    /// Tail of a task's output, capped at [`MAX_BACKGROUND_OUTPUT_READ_BYTES`].
+    pub async fn output_capped(&self, task_id: &str) -> Option<String> {
         let output_path = self.output_path_for(task_id);
-        fs::read_to_string(&output_path).await.ok()
+        tokio::task::spawn_blocking(move || read_file_tail_capped(&output_path))
+            .await
+            .ok()
+            .flatten()
     }
 
     /// Wait for a task to finish, emit progress, or reach the caller's maximum wait.
@@ -1227,8 +1298,7 @@ impl BackgroundTaskManager {
                     .and_then(|started| (Utc::now() - started.with_timezone(&Utc)).to_std().ok())
                     .map(|duration| duration.as_secs_f64())
                     .unwrap_or_default();
-                let output_tail = fs::read_to_string(&output_path)
-                    .await
+                let output_tail = read_file_tail_capped(&output_path)
                     .map(|output| {
                         let tail: Vec<&str> = output.lines().rev().take(20).collect();
                         tail.into_iter().rev().collect::<Vec<_>>().join("\n")

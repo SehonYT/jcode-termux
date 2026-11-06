@@ -1,15 +1,23 @@
-name: Termux armv7 (32-bit ARM Android)
+name: Termux / Android (all ABIs)
 
-# Cross-compiles jcode for 32-bit ARM Android (armv7-linux-androideabi) so the
-# binary runs on Termux on an armeabi-v7a device (armv8l userspace).
+# Cross-compiles jcode for EVERY Android ABI so the port supports every Android
+# device instead of only 32-bit ARM:
 #
-# WHY CI: the target device is 32-bit-only (abilist=armeabi-v7a; no 64-bit
+#   armv7-linux-androideabi  32-bit ARM  (armv8l / armeabi-v7a phones)
+#   aarch64-linux-android    64-bit ARM  (arm64 phones, arm64 Termux)
+#   i686-linux-android       32-bit x86  (x86 emulators, old x86 tablets)
+#   x86_64-linux-android     64-bit x86  (x86_64 emulators)
+#
+# All four are built from ONE matrix. The per-ABI differences (NDK clang wrapper
+# name, cargo env-var suffixes, ELF class/machine) live in "matrix.include", so
+# adding a fifth ABI is one more entry and no new step.
+#
+# WHY CI: the reference device is 32-bit-only (abilist=armeabi-v7a; no 64-bit
 # linker) with ~1.35 GB free RAM. Building this 90-crate workspace against 910
 # registry crates locally is not viable there. GitHub-hosted ubuntu-latest is
 # x86_64 with 16 GB RAM and a fast network.
 #
-# See docs/CI.md for the full rationale, the known blockers, and how to read a
-# failed run.
+# See docs/BUILD.md for the ABI matrix and docs/TERMUX.md for the device story.
 
 on:
   workflow_dispatch:
@@ -23,7 +31,7 @@ on:
         type: boolean
         default: true
       release_tag:
-        description: 'If set, upload the binary to this GitHub Release tag'
+        description: 'If set, upload the binaries to this GitHub Release tag'
         type: string
         default: ''
   push:
@@ -49,39 +57,50 @@ env:
   CARGO_NET_RETRY: '10'
   CARGO_NET_GIT_FETCH_WITH_CLI: 'true'
   RUST_BACKTRACE: '1'
-  # Keep the build quiet-ish and make linker failures readable.
   CARGO_TERM_VERBOSE: 'false'
+  # NDK API level for every ABI. 24 is the Termux baseline; all four ABIs have
+  # their own <abi><API>-clang wrapper at this level.
+  ANDROID_API: '24'
 
 jobs:
   # ---------------------------------------------------------------------------
-  # Gate 0: prove the dependency graph is even buildable for this target before
-  # spending 20+ minutes compiling. aws-lc-sys is the known killer; it needs
-  # cmake + per-arch assembly and does not support armv7-android in practice.
+  # Gate 0: prove the dependency graph is buildable for each target before
+  # spending 20+ minutes compiling. This is a matrix of its own because the
+  # answer genuinely differs per ABI: the gate exists to catch a dependency edge
+  # reachable on only one architecture, which is the class of bug that produced
+  # the original aws-lc-sys failure on armv7.
   # ---------------------------------------------------------------------------
   graph-audit:
-    name: Dependency graph audit
+    name: Graph audit (${{ matrix.target }})
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    outputs:
-      aws_lc_present: ${{ steps.awscheck.outputs.present }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: armv7-linux-androideabi
+          - target: aarch64-linux-android
+          - target: i686-linux-android
+          - target: x86_64-linux-android
     steps:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
 
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
 
-      - name: Graph verdict for the armv7 target
-        id: awscheck
+      - name: Graph verdict for ${{ matrix.target }}
         env:
-          TARGET: armv7-linux-androideabi
+          TARGET: ${{ matrix.target }}
         run: |
           set -uo pipefail
 
           # ALWAYS pass --target. Without it cargo resolves for the HOST and
-          # target-conditional deps (e.g. the cfg(not(android)) azure gate and
-          # the cfg(not(any(freebsd,android))) rquickjs gate) are resolved the
-          # wrong way, which produces false "reachable" readings.
+          # target-conditional deps (the cfg(not(android)) azure gate, the
+          # cfg(not(any(freebsd,android))) rquickjs gate) resolve the wrong way,
+          # which produces false "reachable" readings.
           #
           # Use -e features, not -e normal, for the same reason: feature
           # unification is what actually decides whether aws-lc-sys is built.
@@ -107,24 +126,30 @@ jobs:
             echo "PRESENT"; return 0
           }
 
-          echo "=== armv7-linux-androideabi, -p jcode --no-default-features ==="
+          echo "=== $TARGET, -p jcode --no-default-features ==="
           declare -A verdict
-          for c in aws-lc-sys aws-lc-rs openssl-sys native-tls onig_sys rquickjs-sys \
-                   ring proctitle zstd-sys libsqlite3-sys; do
+          for c in aws-lc-sys aws-lc-rs openssl-sys native-tls onig_sys rquickjs-sys ring proctitle zstd-sys libsqlite3-sys; do
             verdict[$c]="$(check "$c")"
-            printf '%-16s %s\n' "$c" "${verdict[$c]}"
+            printf '%-16s %s' "$c" "${verdict[$c]}"
+            printf '\n'
           done
 
           echo
           echo "=== gates ==="
 
           # HARD REGRESSION GATE. After the Termux port patches, aws-lc-sys must
-          # not be reachable for this target. It has no 32-bit Android support,
-          # and the whole point of gating azure_core out was to remove it. If it
-          # reappears, a dependency edge was added that re-selects the aws-lc-rs
-          # rustls provider. Fail here rather than 25 minutes into a compile.
+          # not be reachable for ANY Android target. It has no 32-bit Android
+          # support, and the whole point of gating azure_core out was to remove
+          # it. If it reappears, a dependency edge was added that re-selects the
+          # aws-lc-rs rustls provider. Fail here rather than 25 minutes into a
+          # compile.
           fail=0
-          for c in aws-lc-sys aws-lc-rs openssl-sys native-tls onig_sys rquickjs-sys; do
+          # rquickjs-sys is deliberately NOT in this list any more. It is now
+          # expected PRESENT on Android: QuickJS is re-enabled via rquickjs-sys'
+          # "bindgen" feature, which generates bindings for any target instead
+          # of relying on the absent pregenerated src/bindings/<triple>.rs.
+          # It is asserted PRESENT further below, not absent.
+          for c in aws-lc-sys aws-lc-rs openssl-sys native-tls onig_sys; do
             if [ "${verdict[$c]}" = "PRESENT" ]; then
               echo "::error::REGRESSION: $c is reachable for $TARGET but must not be."
               fail=1
@@ -134,7 +159,7 @@ jobs:
             echo
             echo "Inspect with:"
             echo "  cargo tree -e features -i aws-lc-sys --target $TARGET -p jcode --no-default-features"
-            echo "Known cause: azure_core's \"reqwest_rustls\" enables reqwest/rustls, and"
+            echo "Known cause: azure_core's reqwest_rustls enables reqwest/rustls, and"
             echo "reqwest/rustls == __rustls-aws-lc-rs. Cargo features are additive, so"
             echo "it cannot be switched off; the dependent must be gated out per-target."
             exit 1
@@ -146,40 +171,129 @@ jobs:
             exit 1
           fi
 
-          # These three compile C and are EXPECTED present. Not fatal: the NDK cc
+          # rquickjs-sys must be PRESENT: codemode/QuickJS is re-enabled on
+          # Android through the crate's "bindgen" feature. If it disappears,
+          # codemode was silently dropped again.
+          if [ "${verdict[rquickjs-sys]}" != "PRESENT" ]; then
+            echo "::error::rquickjs-sys is absent; codemode is expected enabled on Android via the bindgen feature."
+            exit 1
+          fi
+
+          # proctitle is pure Rust on linux-ish targets (libc::prctl) and a
+          # no-op elsewhere; it must still be in the graph on every Android ABI
+          # because the process-title code path calls it unconditionally.
+          if [ "${verdict[proctitle]}" != "PRESENT" ]; then
+            echo "::error::proctitle disappeared from the graph for $TARGET; the process-title path depends on it."
+            exit 1
+          fi
+
+          # These compile C and are EXPECTED present. Not fatal: the NDK cc
           # toolchain is configured for exactly this. Printed for attribution so
           # a later compile error names the crate immediately.
           echo
           echo "Expected C-compiling crates (informational, not fatal):"
-          for c in proctitle zstd-sys libsqlite3-sys; do
-            printf '  %-16s %s\n' "$c" "${verdict[$c]}"
+          for c in zstd-sys libsqlite3-sys; do
+            printf '  %-16s %s' "$c" "${verdict[$c]}"
+            printf '\n'
           done
 
           echo
-          echo "Graph gates PASSED."
-          echo "present=no" >> "$GITHUB_OUTPUT"
+          echo "Graph gates PASSED for $TARGET."
 
       - name: Show inverted trees for troubleshooting
         if: always()
         env:
-          TARGET: armv7-linux-androideabi
+          TARGET: ${{ matrix.target }}
         run: |
           set -uo pipefail
           for c in aws-lc-sys ring zstd-sys libsqlite3-sys proctitle; do
             echo "::group::inverted tree: $c"
-            cargo tree --locked -e features -i "$c" --target "$TARGET" \
-              -p jcode --no-default-features 2>&1 | head -40 || true
+            cargo tree --locked -e features -i "$c" --target "$TARGET" -p jcode --no-default-features 2>&1 | head -40 || true
             echo "::endgroup::"
           done
 
   # ---------------------------------------------------------------------------
-  # Gate 1: the real cross build.
+  # Gate 1: the real cross build, one matrix leg per ABI.
   # ---------------------------------------------------------------------------
-  build-armv7:
-    name: Build jcode (armv7-linux-androideabi)
+  build:
+    name: Build ${{ matrix.target }}
     runs-on: ubuntu-latest
-    timeout-minutes: 180
+    # Four full releases (the workspace plus, on the 32-bit ABIs, the slowest
+    # C dependencies). QuickJS is compiled from vendored C on every Android ABI
+    # now that codemode is re-enabled via rquickjs-sys' "bindgen" feature, which
+    # adds roughly 3-4 minutes per lane. 180 minutes leaves margin for a cold
+    # cache; the per-target rust-cache below is what keeps warm reruns cheap.
+    timeout-minutes: 240
     needs: graph-audit
+    strategy:
+      # Do NOT cancel the other ABIs when one fails: a green armv7 lane is still
+      # useful information when aarch64 breaks, and reruns are expensive.
+      fail-fast: false
+      matrix:
+        include:
+          # clang_wrapper   NDK bin/<name><API>-clang basename. The aarch64
+          #                 wrapper is "aarch64-linux-android" (the triple is
+          #                 aarch64) and NOT "aarch64a-...". i686/x86_64 likewise.
+          # env_suffix      <triple with '-' -> '_'>: cc-rs reads
+          #                 CC_/CXX_/AR_/RANLIB_/CFLAGS_<env_suffix>.
+          # linker_env      uppercase CARGO_TARGET_<TRIPLE>_LINKER name.
+          # abi_tag         clang -target string. For armv7 it differs from the
+          #                 Rust triple (armv7-linux-androideabi vs
+          #                 armv7a-linux-androideabi) -- do not "fix" that.
+          # elf_class       exact readelf "Class:" value.
+          # readelf_machine exact readelf "Machine:" value.
+          # file_machine    substring file(1) must report (phrasing differs).
+          - target: armv7-linux-androideabi
+            clang_wrapper: armv7a-linux-androideabi
+            env_suffix: armv7_linux_androideabi
+            linker_env: CARGO_TARGET_ARMV7_LINUX_ANDROIDEABI_LINKER
+            abi_tag: armv7a-linux-androideabi
+            elf_class: ELF32
+            readelf_machine: ARM
+            # Pinned to the 32-bit class on purpose: a bare "ARM" substring
+            # also matches file(1)'s "ARM aarch64" for an aarch64 binary, so an
+            # unpinned check would pass a totally wrong artifact.
+            file_machine: 'ELF 32-bit LSB.*ARM'
+
+          - target: aarch64-linux-android
+            clang_wrapper: aarch64-linux-android
+            env_suffix: aarch64_linux_android
+            linker_env: CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER
+            abi_tag: aarch64-linux-android
+            elf_class: ELF64
+            readelf_machine: AArch64
+            file_machine: 'ELF 64-bit LSB.*aarch64'
+
+          - target: i686-linux-android
+            clang_wrapper: i686-linux-android
+            env_suffix: i686_linux_android
+            linker_env: CARGO_TARGET_I686_LINUX_ANDROID_LINKER
+            abi_tag: i686-linux-android
+            elf_class: ELF32
+            readelf_machine: Intel 80386
+            # file(1) says "Intel i386" for EM_386 (NOT "Intel 80386"); the
+            # class word is pinned too so this cannot match a 64-bit binary.
+            file_machine: 'ELF 32-bit LSB.*Intel i386'
+
+          - target: x86_64-linux-android
+            clang_wrapper: x86_64-linux-android
+            env_suffix: x86_64_linux_android
+            linker_env: CARGO_TARGET_X86_64_LINUX_ANDROID_LINKER
+            abi_tag: x86_64-linux-android
+            elf_class: ELF64
+            readelf_machine: Advanced Micro Devices X86-64
+            file_machine: 'ELF 64-bit LSB.*x86-64'
+
+    env:
+      TARGET: ${{ matrix.target }}
+      ENV_SUFFIX: ${{ matrix.env_suffix }}
+      CLANG_WRAPPER: ${{ matrix.clang_wrapper }}
+      LINKER_ENV: ${{ matrix.linker_env }}
+      ABI_TAG: ${{ matrix.abi_tag }}
+      ELF_CLASS: ${{ matrix.elf_class }}
+      READELF_MACHINE: ${{ matrix.readelf_machine }}
+      FILE_MACHINE: ${{ matrix.file_machine }}
+
     steps:
       - uses: actions/checkout@v4
         with:
@@ -188,7 +302,20 @@ jobs:
       - name: Install Rust target
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: armv7-linux-androideabi
+          targets: ${{ matrix.target }}
+
+      # Keyed by the matrix target so each ABI gets its own cache: sharing one
+      # would thrash (rlibs are per-target) and one poisoned entry would affect
+      # every lane. The armv7 build is green, so caching is safe here.
+      #
+      # This matters MORE now, not less: QuickJS is built from vendored C on
+      # every Android ABI (codemode re-enabled via rquickjs-sys' "bindgen"
+      # feature), which is slow and stable across source-only edits.
+      - name: Cache cargo + target dir
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: android-${{ matrix.target }}
+          workspaces: '. -> target'
 
       - name: Locate the Android NDK
         id: ndk
@@ -196,7 +323,6 @@ jobs:
           set -euo pipefail
           NDK="${ANDROID_NDK_LATEST_HOME:-${ANDROID_NDK_HOME:-${ANDROID_NDK_ROOT:-}}}"
           if [ -z "$NDK" ] || [ ! -d "$NDK" ]; then
-            # Fall back to the standard runner location.
             NDK="$(ls -d /usr/local/lib/android/sdk/ndk/* 2>/dev/null | sort -V | tail -1 || true)"
           fi
           if [ -z "$NDK" ] || [ ! -d "$NDK" ]; then
@@ -208,47 +334,80 @@ jobs:
           echo "Using NDK: $NDK"
           ls "$NDK/toolchains/llvm/prebuilt/" || true
 
-      - name: Configure the NDK armv7 toolchain
+      - name: Configure the NDK toolchain for ${{ matrix.target }}
         env:
           NDK: ${{ steps.ndk.outputs.ndk }}
         run: |
           set -euo pipefail
-          API=24
+          API="$ANDROID_API"
           # The runner image ships linux-x86_64; discover it rather than hardcoding.
           HOST_TAG="$(ls "$NDK/toolchains/llvm/prebuilt" | head -1)"
           TC="$NDK/toolchains/llvm/prebuilt/$HOST_TAG"
           echo "TC=$TC" >> "$GITHUB_ENV"
-          echo "ARMV7_API=$API" >> "$GITHUB_ENV"
-          ls "$TC/bin/" | grep -E "armv7a-linux-androideabi${API}-clang|^clang$" || true
-          # Fail loudly here rather than 20 minutes into the build.
-          test -x "$TC/bin/armv7a-linux-androideabi${API}-clang" || {
-            echo "::error::armv7a-linux-androideabi${API}-clang wrapper not found in $TC/bin"
-            ls "$TC/bin/" | head -40
+
+          CLANG="$TC/bin/${CLANG_WRAPPER}${API}-clang"
+          echo "--- NDK wrappers matching $CLANG_WRAPPER ---"
+          ls "$TC/bin/" | grep -E "^${CLANG_WRAPPER}[0-9]+-clang(\+\+)?$" || true
+
+          # Fail loudly here rather than 20 minutes into the build. The aarch64
+          # wrapper is "aarch64-linux-android24-clang"; a typo such as
+          # "aarch64a-linux-android24-clang" must not slip through.
+          if [ ! -x "$CLANG" ]; then
+            echo "::error::$CLANG not found. Expected NDK wrapper '${CLANG_WRAPPER}${API}-clang'."
+            echo "--- first 60 entries of $TC/bin ---"
+            ls "$TC/bin/" | head -60
             exit 1
-          }
+          fi
+          if [ ! -x "${CLANG}++" ]; then
+            echo "::error::${CLANG}++ not found (C++ wrapper missing)."
+            exit 1
+          fi
+          echo "AndroidClang=$CLANG" >> "$GITHUB_ENV"
 
       - name: Export cross-compilation environment
         run: |
           set -euo pipefail
           # Cargo passes these to build scripts (cc-rs) as <VAR>_<target-with-underscores>.
-          T=armv7_linux_androideabi
-          CLANG="$TC/bin/armv7a-linux-androideabi${ARMV7_API}-clang"
-          CLANGXX="$TC/bin/armv7a-linux-androideabi${ARMV7_API}-clang++"
+          T="$ENV_SUFFIX"
+          CLANG="$AndroidClang"
+          CLANGXX="${CLANG}++"
           AR="$TC/bin/llvm-ar"
           RANLIB="$TC/bin/llvm-ranlib"
           SYSROOT="$TC/sysroot"
 
+          # Softfp, never hard-float: Android armv7 is -mfloat-abi=softfp. The
+          # NDK clang wrapper already selects the right ABI for its target, so
+          # we deliberately add NO -mfloat-abi flag. A hard-float armv7 binary
+          # links fine and then SIGILLs on device.
           {
-            echo "ARMV7_CC=$CLANG"
             echo "CC_${T}=$CLANG"
             echo "CXX_${T}=$CLANGXX"
             echo "AR_${T}=$AR"
             echo "RANLIB_${T}=$RANLIB"
             echo "CFLAGS_${T}=--sysroot=$SYSROOT -O2 -fPIC"
             echo "CXXFLAGS_${T}=--sysroot=$SYSROOT -O2 -fPIC"
-            echo "BINDGEN_EXTRA_CLANG_ARGS_armv7_linux_androideabi=--sysroot=$SYSROOT --target=armv7a-linux-androideabi${ARMV7_API}"
-            echo "CARGO_TARGET_ARMV7_LINUX_ANDROIDEABI_LINKER=$CLANG"
-            echo "CARGO_TARGET_ARMV7_LINUX_ANDROIDEABI_AR=$AR"
+            # BINDGEN TARGET IS MANDATORY, NOT COSMETIC.
+            #
+            # rquickjs-sys is now PRESENT on Android (codemode/QuickJS is
+            # re-enabled via its "bindgen" feature, because there are no
+            # pregenerated src/bindings/<triple>.rs for these ABIs). bindgen
+            # runs libclang AT BUILD TIME against the TARGET's headers.
+            #
+            # Without --target, libclang falls back to the HOST triple and
+            # emits bindings with the host's size_t width and struct layout.
+            # That is dangerous in exactly the way this project has already
+            # been bitten: an x86_64 host generating bindings for a 32-bit
+            # target usually still COMPILES, and is then subtly wrong at
+            # runtime. Never let bindgen infer the target.
+            #
+            # The --target value uses the NDK clang spelling (hyphens), which
+            # for armv7 is "armv7a-linux-androideabi24" -- note the extra "a"
+            # that the Rust triple does not have. For aarch64 it is
+            # "aarch64-linux-android24", NOT "aarch64a-...".
+            echo "BINDGEN_EXTRA_CLANG_ARGS_${T}=--sysroot=$SYSROOT --target=$ABI_TAG${ANDROID_API}"
+            echo "${LINKER_ENV}=$CLANG"
+            echo "CARGO_TARGET_${T^^}_AR=$AR"
+            # Unprefixed fallbacks for build scripts that ignore the target suffix.
             echo "CC=$CLANG"
             echo "CXX=$CLANGXX"
             echo "AR=$AR"
@@ -256,38 +415,69 @@ jobs:
             echo "CXXFLAGS=--sysroot=$SYSROOT -O2 -fPIC"
           } >> "$GITHUB_ENV"
 
-          # cmake is only needed if aws-lc-sys/boring-sys sneak in; make it loud.
-          echo "CMAKE_TOOLCHAIN_FILE_SYSROOT=$SYSROOT" >> "$GITHUB_ENV"
+          # Record the expected ELF identity for the verify step below. These are
+          # matched EXACTLY (not as loose substrings) against readelf, so a
+          # target mixup fails the lane instead of shipping a wrong binary.
+          {
+            echo "EXPECT_CLASS=$ELF_CLASS"
+            echo "EXPECT_MACHINE=$READELF_MACHINE"
+            echo "EXPECT_FILE_MACHINE=$FILE_MACHINE"
+          } >> "$GITHUB_ENV"
 
-      - name: Preflight — known 32-bit ARM blockers
+      - name: Preflight - known blockers
         run: |
           set -euo pipefail
-          # These are the three crates the audit (docs/AUDIT.md) found that
-          # survive --no-default-features and compile C for a target with no
-          # prebuilt bindings. This step does not fail the job; it prints a
-          # clear verdict so a later compile error is attributable.
-          echo "### Known blocker reachability ###"
+          # This step does not fail the job; it prints a clear verdict so a
+          # later compile error is attributable. Always target-scoped: an
+          # unscoped 'cargo tree -i' resolves for the HOST and lies.
+          echo "### Blocker reachability for $TARGET ###"
           for c in aws-lc-sys onig_sys rquickjs-sys proctitle zstd-sys libsqlite3-sys; do
-            if cargo tree --locked -i "$c" >/dev/null 2>&1; then
+            if cargo tree --locked -i "$c" --target "$TARGET" -p jcode --no-default-features >/dev/null 2>&1; then
               echo "REACHABLE   : $c"
             else
               echo "not in graph: $c"
             fi
           done
           echo
+          # rquickjs-sys is PRESENT by design now, so print WHICH clang flags
+          # bindgen will use for this lane. If this line ever shows a missing or
+          # host-flavoured --target, the bindings are being generated for the
+          # wrong architecture and the resulting binary is subtly wrong even
+          # when it compiles.
+          BGEN_VAR="BINDGEN_EXTRA_CLANG_ARGS_${ENV_SUFFIX}"
+          BGEN_VAL="${!BGEN_VAR:-}"
+          echo
+          echo "### bindgen target (rquickjs/QuickJS C bindings) ###"
+          echo "${BGEN_VAR}=${BGEN_VAL:-<UNSET — bindgen would parse HOST headers!>}"
+          # Test the value explicitly rather than pattern-matching ":-${...}":
+          # an empty/unset value must be reported as such, not accidentally
+          # matched by a wildcard case.
+          if [ -z "$BGEN_VAL" ]; then
+            echo "::error::${BGEN_VAR} is unset; bindgen would fall back to the HOST target."
+            exit 1
+          fi
+          case "$BGEN_VAL" in
+            *"--target=$ABI_TAG"*) echo "bindgen target: OK ($ABI_TAG)" ;;
+            *) echo "::error::${BGEN_VAR} does not contain --target=$ABI_TAG; bindgen would generate wrong bindings."
+               exit 1 ;;
+          esac
+
+          echo
           echo "### Reminder ###"
           echo "aws-lc-sys  -> must be replaced by ring (quinn-proto pulls BOTH unconditionally)"
           echo "onig_sys    -> syntect 'regex-onig'; switch to 'regex-fancy' (pure Rust)"
-          echo "rquickjs-sys-> needs libclang/bindgen; mirror the existing freebsd target gate"
-          echo "proctitle   -> C shim, Linux-only; cfg-gate the call site"
+          echo "rquickjs-sys-> EXPECTED PRESENT: codemode is re-enabled via the 'bindgen' feature"
+          echo "proctitle   -> pure Rust on linux-ish targets; cfg-gate the call site if it grows C"
 
       - name: Show effective build plan
         run: |
           set -euo pipefail
-          echo "rustc : $(rustc -vV | tr '\n' ' ')"
-          echo "cargo : $(cargo --version)"
-          echo "linker: $CARGO_TARGET_ARMV7_LINUX_ANDROIDEABI_LINKER"
-          "$CC_armv7_linux_androideabi" --version | head -2
+          echo "target : $TARGET ($ABI_TAG, API $ANDROID_API)"
+          rustc -vV | tr '\n' ' '
+          echo
+          cargo --version
+          echo "linker : $AndroidClang"
+          "$AndroidClang" --version | head -2
 
       - name: Install build prerequisites for C dependencies
         run: |
@@ -307,10 +497,6 @@ jobs:
         # step fail turns one real error (a stale lock) into a confusing
         # plumbing error 30 seconds in. The Build step below is the single
         # source of truth and is the one that runs --locked.
-        #
-        # Observed precedent: run 42197342455 died here in 31s with
-        # "cannot update the lock file ... because --locked was passed",
-        # masking that the actual source patches were fine.
         continue-on-error: true
         run: |
           set -uo pipefail
@@ -339,7 +525,7 @@ jobs:
           NO_DEFAULT: ${{ inputs.no_default_features }}
         run: |
           set -euo pipefail
-          ARGS=(build --release --locked --target armv7-linux-androideabi -p jcode)
+          ARGS=(build --release --locked --target "$TARGET" -p jcode)
           if [ "${NO_DEFAULT:-true}" = "true" ]; then
             ARGS+=(--no-default-features)
           fi
@@ -348,32 +534,49 @@ jobs:
           fi
           echo "cargo ${ARGS[*]}"
           # Tee so a failure is still visible in the log tail.
-          cargo "${ARGS[@]}" 2>&1 | tee /tmp/build.log
+          cargo "${ARGS[@]}" 2>&1 | tee "/tmp/build-$TARGET.log"
           exit "${PIPESTATUS[0]}"
 
       - name: Upload build log on failure
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: armv7-build-log
-          path: /tmp/build.log
+          name: build-log-${{ matrix.target }}
+          path: /tmp/build-${{ matrix.target }}.log
           if-no-files-found: warn
 
-      - name: Verify the ELF is 32-bit ARM
+      - name: Verify the ELF matches the requested target
         if: success()
         run: |
           set -euo pipefail
-          BIN=target/armv7-linux-androideabi/release/jcode
+          BIN="target/$TARGET/release/jcode"
           test -f "$BIN" || { echo "::error::binary not produced at $BIN"; find target -name jcode -type f | head; exit 1; }
           file "$BIN"
           readelf -h "$BIN"
-          echo "--- assertions ---"
-          file "$BIN" | grep -qi 'ELF 32-bit' || { echo "::error::not ELF 32-bit"; exit 1; }
-          file "$BIN" | grep -qi 'ARM'        || { echo "::error::not ARM"; exit 1; }
-          readelf -h "$BIN" | grep -qi 'ARM'  || { echo "::error::readelf does not report ARM"; exit 1; }
-          # Class must be ELF32 (not ELF64) and must NOT be aarch64.
-          readelf -h "$BIN" | grep -q 'ELF32' || { echo "::error::ELF class is not ELF32"; exit 1; }
-          if file "$BIN" | grep -qi 'aarch64'; then echo "::error::produced an aarch64 binary"; exit 1; fi
+          echo "--- assertions (exact, target-scoped) ---"
+
+          ACTUAL_CLASS="$(readelf -h "$BIN" | awk -F: '/^[[:space:]]*Class:/{gsub(/^[[:space:]]+/,"",$2); print $2}')"
+          ACTUAL_MACHINE="$(readelf -h "$BIN" | awk -F: '/^[[:space:]]*Machine:/{sub(/^[[:space:]]+/,"",$2); print $2}')"
+          echo "target=$TARGET class='$ACTUAL_CLASS' (want '$EXPECT_CLASS') machine='$ACTUAL_MACHINE' (want '$EXPECT_MACHINE')"
+
+          if [ "$ACTUAL_CLASS" != "$EXPECT_CLASS" ]; then
+            echo "::error::ELF class mismatch for $TARGET: got '$ACTUAL_CLASS', want '$EXPECT_CLASS'. Target mixup."
+            exit 1
+          fi
+          if [ "$ACTUAL_MACHINE" != "$EXPECT_MACHINE" ]; then
+            echo "::error::ELF machine mismatch for $TARGET: got '$ACTUAL_MACHINE', want '$EXPECT_MACHINE'. Target mixup."
+            exit 1
+          fi
+          if ! file "$BIN" | grep -qi "$EXPECT_FILE_MACHINE"; then
+            echo "::error::file(1) does not report '$EXPECT_FILE_MACHINE' for $TARGET."
+            exit 1
+          fi
+          # Never ship a hard-float armv7 object: Android armv7 is softfp.
+          # HARD-FLOAT BINARIES LINK FINE AND THEN CRASH ON DEVICE.
+          if [ "$TARGET" = "armv7-linux-androideabi" ] && readelf -A "$BIN" 2>/dev/null | grep -qi 'Tag_ABI_VFP_args: VFP registers'; then
+            echo "::error::armv7 binary is hard-float (Tag_ABI_VFP_args: VFP registers); Android armv7 is softfp."
+            exit 1
+          fi
           readelf -d "$BIN" | grep -i 'NEEDED' || true
           echo "--- size ---"
           ls -lh "$BIN"
@@ -385,30 +588,54 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dist
-          cp target/armv7-linux-androideabi/release/jcode dist/jcode-armv7-linux-androideabi
-          chmod +x dist/jcode-armv7-linux-androideabi
-          ( cd dist && tar czf jcode-armv7-linux-androideabi.tar.gz jcode-armv7-linux-androideabi )
+          NAME="jcode-$TARGET"
+          cp "target/$TARGET/release/jcode" "dist/$NAME"
+          chmod +x "dist/$NAME"
+          ( cd dist && tar czf "$NAME.tar.gz" "$NAME" )
           sha256sum dist/*
 
       - name: Upload artifact
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: jcode-armv7-linux-androideabi
+          name: jcode-${{ matrix.target }}
           path: |
-            dist/jcode-armv7-linux-androideabi
-            dist/jcode-armv7-linux-androideabi.tar.gz
+            dist/jcode-${{ matrix.target }}
+            dist/jcode-${{ matrix.target }}.tar.gz
           if-no-files-found: error
 
-      - name: Attach to release
-        if: success() && inputs.release_tag != ''
+  # ---------------------------------------------------------------------------
+  # Gate 2: attach every ABI to one release. Runs only if all four legs passed,
+  # so a release never gets a partial ABI set.
+  # ---------------------------------------------------------------------------
+  release:
+    name: Attach all ABIs to release
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: build
+    if: ${{ success() && inputs.release_tag != '' }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Show what will be attached
+        run: |
+          set -euo pipefail
+          ls -lR dist
+
+      - name: Upload to release
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ inputs.release_tag }}
         run: |
           set -euo pipefail
           if ! gh release view "$TAG" >/dev/null 2>&1; then
-            gh release create "$TAG" --title "$TAG" --notes "jcode for 32-bit ARM Android Termux (armv7-linux-androideabi)."
+            gh release create "$TAG" --title "$TAG" --notes "jcode for Android/Termux: armv7-linux-androideabi, aarch64-linux-android, i686-linux-android, x86_64-linux-android."
           fi
-          gh release upload "$TAG" dist/jcode-armv7-linux-androideabi.tar.gz --clobber
-          gh release upload "$TAG" dist/jcode-armv7-linux-androideabi --clobber
+          # --clobber makes reruns idempotent.
+          for f in dist/jcode-*.tar.gz dist/jcode-armv7-linux-androideabi dist/jcode-aarch64-linux-android dist/jcode-i686-linux-android dist/jcode-x86_64-linux-android; do
+            [ -e "$f" ] || continue
+            gh release upload "$TAG" "$f" --clobber
+          done
