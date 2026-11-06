@@ -71,35 +71,106 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
-      - name: Show resolved graph facts
-        run: |
-          set -euo pipefail
-          echo "::group::inverted tree for aws-lc-sys"
-          cargo tree --locked -e features -i aws-lc-sys 2>&1 | head -60 || true
-          echo "::endgroup::"
-          echo "::group::inverted tree for ring"
-          cargo tree --locked -e features -i ring 2>&1 | head -40 || true
-          echo "::endgroup::"
-          echo "::group::targets whose build needs a C toolchain"
-          for c in libsqlite3-sys zstd-sys onig_sys rquickjs-sys proctitle aws-lc-sys ring; do
-            echo "--- $c"
-            cargo tree --locked -i "$c" 2>&1 | head -25 || true
-          done
-          echo "::endgroup::"
-
-      - name: Decide whether aws-lc-sys is on the armv7 path
+      - name: Graph verdict for the armv7 target
         id: awscheck
+        env:
+          TARGET: armv7-linux-androideabi
         run: |
-          set -euo pipefail
-          # Ask cargo for the target-specific graph. If aws-lc-sys survives the
-          # feature pruning, the compile job will almost certainly fail.
-          if cargo tree --locked -e features -i aws-lc-sys >/dev/null 2>&1; then
-            echo "present=yes" >> "$GITHUB_OUTPUT"
-            echo "aws-lc-sys IS reachable in the dependency graph."
-          else
-            echo "present=no" >> "$GITHUB_OUTPUT"
-            echo "aws-lc-sys is not reachable. Good."
+          set -uo pipefail
+
+          # ALWAYS pass --target. Without it cargo resolves for the HOST and
+          # target-conditional deps (e.g. the cfg(not(android)) azure gate and
+          # the cfg(not(any(freebsd,android))) rquickjs gate) are resolved the
+          # wrong way, which produces false "reachable" readings.
+          #
+          # Use -e features, not -e normal, for the same reason: feature
+          # unification is what actually decides whether aws-lc-sys is built.
+          #
+          # Cargo exits non-zero with "did not match any packages" when a crate
+          # is not in the graph at all; "nothing to print" on stdout also means
+          # absent. Both count as ABSENT.
+
+          check() {
+            local crate="$1"
+            local out rc
+            out="$(cargo tree --locked -e features -i "$crate" --target "$TARGET" -p jcode --no-default-features 2>&1)"
+            rc=$?
+            if printf '%s' "$out" | grep -q 'nothing to print'; then
+              echo "ABSENT"; return 0
+            fi
+            if printf '%s' "$out" | grep -q 'did not match any packages'; then
+              echo "ABSENT"; return 0
+            fi
+            if [ "$rc" -ne 0 ]; then
+              echo "ERROR"; return 0
+            fi
+            echo "PRESENT"; return 0
+          }
+
+          echo "=== armv7-linux-androideabi, -p jcode --no-default-features ==="
+          declare -A verdict
+          for c in aws-lc-sys aws-lc-rs openssl-sys native-tls onig_sys rquickjs-sys \
+                   ring proctitle zstd-sys libsqlite3-sys; do
+            verdict[$c]="$(check "$c")"
+            printf '%-16s %s\n' "$c" "${verdict[$c]}"
+          done
+
+          echo
+          echo "=== gates ==="
+
+          # HARD REGRESSION GATE. After the Termux port patches, aws-lc-sys must
+          # not be reachable for this target. It has no 32-bit Android support,
+          # and the whole point of gating azure_core out was to remove it. If it
+          # reappears, a dependency edge was added that re-selects the aws-lc-rs
+          # rustls provider. Fail here rather than 25 minutes into a compile.
+          fail=0
+          for c in aws-lc-sys aws-lc-rs openssl-sys native-tls onig_sys rquickjs-sys; do
+            if [ "${verdict[$c]}" = "PRESENT" ]; then
+              echo "::error::REGRESSION: $c is reachable for $TARGET but must not be."
+              fail=1
+            fi
+          done
+          if [ "$fail" -ne 0 ]; then
+            echo
+            echo "Inspect with:"
+            echo "  cargo tree -e features -i aws-lc-sys --target $TARGET -p jcode --no-default-features"
+            echo "Known cause: azure_core's \"reqwest_rustls\" enables reqwest/rustls, and"
+            echo "reqwest/rustls == __rustls-aws-lc-rs. Cargo features are additive, so"
+            echo "it cannot be switched off; the dependent must be gated out per-target."
+            exit 1
           fi
+
+          # ring must be present: it is the TLS provider the port switched to.
+          if [ "${verdict[ring]}" != "PRESENT" ]; then
+            echo "::error::ring is absent; the port expects the rustls ring provider on this target."
+            exit 1
+          fi
+
+          # These three compile C and are EXPECTED present. Not fatal: the NDK cc
+          # toolchain is configured for exactly this. Printed for attribution so
+          # a later compile error names the crate immediately.
+          echo
+          echo "Expected C-compiling crates (informational, not fatal):"
+          for c in proctitle zstd-sys libsqlite3-sys; do
+            printf '  %-16s %s\n' "$c" "${verdict[$c]}"
+          done
+
+          echo
+          echo "Graph gates PASSED."
+          echo "present=no" >> "$GITHUB_OUTPUT"
+
+      - name: Show inverted trees for troubleshooting
+        if: always()
+        env:
+          TARGET: armv7-linux-androideabi
+        run: |
+          set -uo pipefail
+          for c in aws-lc-sys ring zstd-sys libsqlite3-sys proctitle; do
+            echo "::group::inverted tree: $c"
+            cargo tree --locked -e features -i "$c" --target "$TARGET" \
+              -p jcode --no-default-features 2>&1 | head -40 || true
+            echo "::endgroup::"
+          done
 
   # ---------------------------------------------------------------------------
   # Gate 1: the real cross build.
@@ -228,7 +299,38 @@ jobs:
           sudo apt-get install -y -qq cmake ninja-build libclang-dev clang llvm
 
       - name: cargo fetch (pre-warm the registry)
-        run: cargo fetch --locked
+        # Deliberately NON-FATAL and deliberately NOT --locked.
+        #
+        # Rationale: this step exists only to move the ~910-crate download ahead
+        # of the compile so a network hiccup is not mistaken for a compile
+        # failure. A stale lock file is NOT a fetch problem, and letting this
+        # step fail turns one real error (a stale lock) into a confusing
+        # plumbing error 30 seconds in. The Build step below is the single
+        # source of truth and is the one that runs --locked.
+        #
+        # Observed precedent: run 42197342455 died here in 31s with
+        # "cannot update the lock file ... because --locked was passed",
+        # masking that the actual source patches were fine.
+        continue-on-error: true
+        run: |
+          set -uo pipefail
+          if ! cargo fetch; then
+            echo "::warning::cargo fetch failed; continuing so the Build step reports the real error."
+          fi
+
+      - name: Report lock-file freshness
+        # Cheap, offline, and it names the actual problem if Cargo.lock is stale.
+        continue-on-error: true
+        run: |
+          set -uo pipefail
+          if cargo metadata --locked --format-version 1 >/dev/null 2>/tmp/meta.err; then
+            echo "Cargo.lock is up to date."
+          else
+            echo "::warning::Cargo.lock is STALE relative to the manifests. The Build step will fail with --locked."
+            echo "Regenerate it with: cargo update --workspace  (or cargo generate-lockfile)"
+            echo "--- cargo metadata stderr ---"
+            cat /tmp/meta.err || true
+          fi
 
       - name: Build
         id: build
