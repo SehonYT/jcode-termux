@@ -58,7 +58,6 @@ urlencoding = "2"
 # TUI
 ratatui = "0.30"
 crossterm = { version = "0.29", features = ["event-stream"] }
-arboard = "3"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 unicode-width = "0.2"
 unicode-segmentation = "1"
@@ -114,6 +113,16 @@ test-support = ["jcode-app-core/test-support"]
 # Enables the downstream test-support helpers for *this* crate's own test
 # target. Feature unification applies this only to test/bench/example builds.
 jcode-app-core = { path = "../jcode-app-core", default-features = false, features = ["test-support"] }
+
+# Termux/armv7 port: arboard 3.x has NO Android backend. Its platform modules
+# are Windows / macOS / X11-Wayland only, so on target_os = "android" the
+# `platform` module is empty and arboard fails with "cannot find `Clipboard` in
+# `platform`". Termux has no X11, Wayland, Win32 or NSPasteboard either, so
+# arboard could never work here anyway. The clipboard falls back to OSC 52
+# (copy_to_clipboard_osc52), which is the correct mechanism for Terminal/Termux
+# and is already the documented remote-session fallback in helpers.rs.
+[target.'cfg(not(target_os = "android"))'.dependencies]
+arboard = "3"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 global-hotkey = "0.7"

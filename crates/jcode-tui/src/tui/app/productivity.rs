@@ -145,6 +145,14 @@ fn copy_image_xclip(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
+#[cfg(target_os = "android")]
+fn copy_image_arboard(_png: &[u8]) -> bool {
+    // Termux/armv7 port: arboard is not built for Android (no X11, Wayland,
+    // Win32 or NSPasteboard), so there is no image-clipboard backend here.
+    false
+}
+
+#[cfg(not(target_os = "android"))]
 fn copy_image_arboard(png: &[u8]) -> bool {
     let Ok(decoded) = image::load_from_memory(png) else {
         return false;

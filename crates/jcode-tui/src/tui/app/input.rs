@@ -174,10 +174,20 @@ fn read_clipboard_text() -> Option<String> {
         return Some(text);
     }
 
-    let Ok(mut clipboard) = arboard::Clipboard::new() else {
-        return None;
-    };
-    clipboard.get_text().ok()
+    // Termux/armv7 port: arboard is not built for Android (no X11, Wayland,
+    // Win32 or NSPasteboard). There is no clipboard-read path on Termux, so
+    // report that no text is available rather than failing to compile.
+    #[cfg(target_os = "android")]
+    {
+        None
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let Ok(mut clipboard) = arboard::Clipboard::new() else {
+            return None;
+        };
+        clipboard.get_text().ok()
+    }
 }
 
 fn read_wayland_clipboard_text() -> Option<String> {

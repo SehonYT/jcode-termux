@@ -493,6 +493,11 @@ pub(super) fn copy_to_clipboard(text: &str) -> bool {
             ) {
                 return true;
             }
+            // Termux/armv7 port: arboard has no Android backend (Termux has no
+            // X11, Wayland, Win32 or NSPasteboard), so it is not built there.
+            // OSC 52 is the correct clipboard mechanism for a terminal
+            // emulator and is what this branch falls back to anyway.
+            #[cfg(not(target_os = "android"))]
             if arboard::Clipboard::new()
                 .and_then(|mut cb| cb.set_text(text.to_string()))
                 .is_ok()
@@ -1039,7 +1044,10 @@ pub(super) fn clipboard_image() -> Option<(String, String)> {
         }
     }
 
-    // Fallback: arboard (works on X11/XWayland and macOS via NSPasteboard)
+    // Fallback: arboard (works on X11/XWayland and macOS via NSPasteboard).
+    // Termux/armv7 port: arboard is not built for Android (no X11, Wayland,
+    // Win32 or NSPasteboard), so there is no image-clipboard backend there.
+    #[cfg(not(target_os = "android"))]
     if let Ok(mut clipboard) = arboard::Clipboard::new()
         && let Ok(img) = clipboard.get_image()
         && let Some(png_data) = encode_rgba_as_png(img.width, img.height, &img.bytes)
@@ -1053,6 +1061,8 @@ pub(super) fn clipboard_image() -> Option<(String, String)> {
 
 pub(super) fn copy_image_to_clipboard(media_type: &str, base64_data: &str) -> bool {
     use base64::Engine;
+    // Only the arboard (non-Android) path below builds an owned RGBA buffer.
+    #[cfg(not(target_os = "android"))]
     use std::borrow::Cow;
     use std::io::Write;
     use std::process::Stdio;
@@ -1091,15 +1101,28 @@ pub(super) fn copy_image_to_clipboard(media_type: &str, base64_data: &str) -> bo
     };
     let rgba = decoded.to_rgba8();
     let (width, height) = rgba.dimensions();
-    arboard::Clipboard::new()
-        .and_then(|mut clipboard| {
-            clipboard.set_image(arboard::ImageData {
-                width: width as usize,
-                height: height as usize,
-                bytes: Cow::Owned(rgba.into_raw()),
+    // Termux/armv7 port: arboard has no Android backend, so image-to-clipboard
+    // is unavailable there. The Wayland path above and OSC 52 (text only) are
+    // the alternatives; returning false lets the caller report that copy failed
+    // rather than claiming success.
+    #[cfg(target_os = "android")]
+    {
+        let _ = (rgba, width, height);
+        false
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = (width, height);
+        arboard::Clipboard::new()
+            .and_then(|mut clipboard| {
+                clipboard.set_image(arboard::ImageData {
+                    width: width as usize,
+                    height: height as usize,
+                    bytes: Cow::Owned(rgba.into_raw()),
+                })
             })
-        })
-        .is_ok()
+            .is_ok()
+    }
 }
 
 /// Extract an image URL from text that looks like an HTML img tag or a bare image URL.
@@ -1177,6 +1200,10 @@ pub(super) fn download_image_url(url: &str) -> Option<(String, String)> {
 }
 
 /// Encode raw RGBA pixel data as PNG bytes.
+///
+/// Termux/armv7 port: only the arboard image-paste fallback calls this, and
+/// arboard is not built for Android, so the function is unused there.
+#[cfg_attr(target_os = "android", allow(dead_code))]
 pub(super) fn encode_rgba_as_png(width: usize, height: usize, rgba: &[u8]) -> Option<Vec<u8>> {
     use image::{ImageBuffer, RgbaImage};
     use std::io::Cursor;

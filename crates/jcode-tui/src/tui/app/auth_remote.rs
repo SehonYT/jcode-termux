@@ -401,6 +401,9 @@ impl App {
             if code == KeyCode::Char('v')
                 && modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::SUPER)
             {
+                // Termux/armv7 port: arboard is not built for Android, so SSH
+                // login paste is unavailable there (no OSC 52 read path).
+                #[cfg(not(target_os = "android"))]
                 if let Ok(mut clipboard) = arboard::Clipboard::new()
                     && let Ok(text) = clipboard.get_text()
                 {
@@ -439,6 +442,8 @@ impl App {
                     || modifiers.contains(KeyModifiers::SUPER) =>
             {
                 // Explicit text clipboard paste only. Never invoke smart file/image paste.
+                // Termux/armv7 port: arboard is not built for Android.
+                #[cfg(not(target_os = "android"))]
                 if let Ok(mut clipboard) = arboard::Clipboard::new()
                     && let Ok(text) = clipboard.get_text()
                 {
