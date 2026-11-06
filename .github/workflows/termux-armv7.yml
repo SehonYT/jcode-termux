@@ -1,0 +1,312 @@
+name: Termux armv7 (32-bit ARM Android)
+
+# Cross-compiles jcode for 32-bit ARM Android (armv7-linux-androideabi) so the
+# binary runs on Termux on an armeabi-v7a device (armv8l userspace).
+#
+# WHY CI: the target device is 32-bit-only (abilist=armeabi-v7a; no 64-bit
+# linker) with ~1.35 GB free RAM. Building this 90-crate workspace against 910
+# registry crates locally is not viable there. GitHub-hosted ubuntu-latest is
+# x86_64 with 16 GB RAM and a fast network.
+#
+# See docs/CI.md for the full rationale, the known blockers, and how to read a
+# failed run.
+
+on:
+  workflow_dispatch:
+    inputs:
+      features:
+        description: 'Comma-separated feature list for the root crate (empty = none)'
+        type: string
+        default: ''
+      no_default_features:
+        description: 'Build with --no-default-features (recommended; drops aws-sdk/bedrock + pdf)'
+        type: boolean
+        default: true
+      release_tag:
+        description: 'If set, upload the binary to this GitHub Release tag'
+        type: string
+        default: ''
+  push:
+    branches:
+      - termux-armv7
+      - termux
+  pull_request:
+    paths:
+      - '.github/workflows/termux-armv7.yml'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+
+permissions:
+  contents: write
+
+# The workspace .cargo/config.toml sets build.rustc-wrapper to a nightly-only
+# shim (-Zthreads + RUSTC_BOOTSTRAP). It must be disabled for a stable cross
+# build; the repo does the same for its Windows lanes.
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: '0'
+  CARGO_BUILD_RUSTC_WRAPPER: ''
+  CARGO_NET_RETRY: '10'
+  CARGO_NET_GIT_FETCH_WITH_CLI: 'true'
+  RUST_BACKTRACE: '1'
+  # Keep the build quiet-ish and make linker failures readable.
+  CARGO_TERM_VERBOSE: 'false'
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Gate 0: prove the dependency graph is even buildable for this target before
+  # spending 20+ minutes compiling. aws-lc-sys is the known killer; it needs
+  # cmake + per-arch assembly and does not support armv7-android in practice.
+  # ---------------------------------------------------------------------------
+  graph-audit:
+    name: Dependency graph audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    outputs:
+      aws_lc_present: ${{ steps.awscheck.outputs.present }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Show resolved graph facts
+        run: |
+          set -euo pipefail
+          echo "::group::inverted tree for aws-lc-sys"
+          cargo tree --locked -e features -i aws-lc-sys 2>&1 | head -60 || true
+          echo "::endgroup::"
+          echo "::group::inverted tree for ring"
+          cargo tree --locked -e features -i ring 2>&1 | head -40 || true
+          echo "::endgroup::"
+          echo "::group::targets whose build needs a C toolchain"
+          for c in libsqlite3-sys zstd-sys onig_sys rquickjs-sys proctitle aws-lc-sys ring; do
+            echo "--- $c"
+            cargo tree --locked -i "$c" 2>&1 | head -25 || true
+          done
+          echo "::endgroup::"
+
+      - name: Decide whether aws-lc-sys is on the armv7 path
+        id: awscheck
+        run: |
+          set -euo pipefail
+          # Ask cargo for the target-specific graph. If aws-lc-sys survives the
+          # feature pruning, the compile job will almost certainly fail.
+          if cargo tree --locked -e features -i aws-lc-sys >/dev/null 2>&1; then
+            echo "present=yes" >> "$GITHUB_OUTPUT"
+            echo "aws-lc-sys IS reachable in the dependency graph."
+          else
+            echo "present=no" >> "$GITHUB_OUTPUT"
+            echo "aws-lc-sys is not reachable. Good."
+          fi
+
+  # ---------------------------------------------------------------------------
+  # Gate 1: the real cross build.
+  # ---------------------------------------------------------------------------
+  build-armv7:
+    name: Build jcode (armv7-linux-androideabi)
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    needs: graph-audit
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install Rust target
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: armv7-linux-androideabi
+
+      - name: Locate the Android NDK
+        id: ndk
+        run: |
+          set -euo pipefail
+          NDK="${ANDROID_NDK_LATEST_HOME:-${ANDROID_NDK_HOME:-${ANDROID_NDK_ROOT:-}}}"
+          if [ -z "$NDK" ] || [ ! -d "$NDK" ]; then
+            # Fall back to the standard runner location.
+            NDK="$(ls -d /usr/local/lib/android/sdk/ndk/* 2>/dev/null | sort -V | tail -1 || true)"
+          fi
+          if [ -z "$NDK" ] || [ ! -d "$NDK" ]; then
+            echo "::error::No Android NDK found on this runner."
+            ls -la /usr/local/lib/android/sdk/ 2>/dev/null || true
+            exit 1
+          fi
+          echo "ndk=$NDK" >> "$GITHUB_OUTPUT"
+          echo "Using NDK: $NDK"
+          ls "$NDK/toolchains/llvm/prebuilt/" || true
+
+      - name: Configure the NDK armv7 toolchain
+        env:
+          NDK: ${{ steps.ndk.outputs.ndk }}
+        run: |
+          set -euo pipefail
+          API=24
+          # The runner image ships linux-x86_64; discover it rather than hardcoding.
+          HOST_TAG="$(ls "$NDK/toolchains/llvm/prebuilt" | head -1)"
+          TC="$NDK/toolchains/llvm/prebuilt/$HOST_TAG"
+          echo "TC=$TC" >> "$GITHUB_ENV"
+          echo "ARMV7_API=$API" >> "$GITHUB_ENV"
+          ls "$TC/bin/" | grep -E "armv7a-linux-androideabi${API}-clang|^clang$" || true
+          # Fail loudly here rather than 20 minutes into the build.
+          test -x "$TC/bin/armv7a-linux-androideabi${API}-clang" || {
+            echo "::error::armv7a-linux-androideabi${API}-clang wrapper not found in $TC/bin"
+            ls "$TC/bin/" | head -40
+            exit 1
+          }
+
+      - name: Export cross-compilation environment
+        run: |
+          set -euo pipefail
+          # Cargo passes these to build scripts (cc-rs) as <VAR>_<target-with-underscores>.
+          T=armv7_linux_androideabi
+          CLANG="$TC/bin/armv7a-linux-androideabi${ARMV7_API}-clang"
+          CLANGXX="$TC/bin/armv7a-linux-androideabi${ARMV7_API}-clang++"
+          AR="$TC/bin/llvm-ar"
+          RANLIB="$TC/bin/llvm-ranlib"
+          SYSROOT="$TC/sysroot"
+
+          {
+            echo "ARMV7_CC=$CLANG"
+            echo "CC_${T}=$CLANG"
+            echo "CXX_${T}=$CLANGXX"
+            echo "AR_${T}=$AR"
+            echo "RANLIB_${T}=$RANLIB"
+            echo "CFLAGS_${T}=--sysroot=$SYSROOT -O2 -fPIC"
+            echo "CXXFLAGS_${T}=--sysroot=$SYSROOT -O2 -fPIC"
+            echo "BINDGEN_EXTRA_CLANG_ARGS_armv7_linux_androideabi=--sysroot=$SYSROOT --target=armv7a-linux-androideabi${ARMV7_API}"
+            echo "CARGO_TARGET_ARMV7_LINUX_ANDROIDEABI_LINKER=$CLANG"
+            echo "CARGO_TARGET_ARMV7_LINUX_ANDROIDEABI_AR=$AR"
+            echo "CC=$CLANG"
+            echo "CXX=$CLANGXX"
+            echo "AR=$AR"
+            echo "CFLAGS=--sysroot=$SYSROOT -O2 -fPIC"
+            echo "CXXFLAGS=--sysroot=$SYSROOT -O2 -fPIC"
+          } >> "$GITHUB_ENV"
+
+          # cmake is only needed if aws-lc-sys/boring-sys sneak in; make it loud.
+          echo "CMAKE_TOOLCHAIN_FILE_SYSROOT=$SYSROOT" >> "$GITHUB_ENV"
+
+      - name: Preflight — known 32-bit ARM blockers
+        run: |
+          set -euo pipefail
+          # These are the three crates the audit (docs/AUDIT.md) found that
+          # survive --no-default-features and compile C for a target with no
+          # prebuilt bindings. This step does not fail the job; it prints a
+          # clear verdict so a later compile error is attributable.
+          echo "### Known blocker reachability ###"
+          for c in aws-lc-sys onig_sys rquickjs-sys proctitle zstd-sys libsqlite3-sys; do
+            if cargo tree --locked -i "$c" >/dev/null 2>&1; then
+              echo "REACHABLE   : $c"
+            else
+              echo "not in graph: $c"
+            fi
+          done
+          echo
+          echo "### Reminder ###"
+          echo "aws-lc-sys  -> must be replaced by ring (quinn-proto pulls BOTH unconditionally)"
+          echo "onig_sys    -> syntect 'regex-onig'; switch to 'regex-fancy' (pure Rust)"
+          echo "rquickjs-sys-> needs libclang/bindgen; mirror the existing freebsd target gate"
+          echo "proctitle   -> C shim, Linux-only; cfg-gate the call site"
+
+      - name: Show effective build plan
+        run: |
+          set -euo pipefail
+          echo "rustc : $(rustc -vV | tr '\n' ' ')"
+          echo "cargo : $(cargo --version)"
+          echo "linker: $CARGO_TARGET_ARMV7_LINUX_ANDROIDEABI_LINKER"
+          "$CC_armv7_linux_androideabi" --version | head -2
+
+      - name: Install build prerequisites for C dependencies
+        run: |
+          set -euo pipefail
+          # cmake is required by aws-lc-sys / onig / quickjs-ish build scripts.
+          # libclang is required by bindgen (rquickjs-sys generates bindings on
+          # targets without prebuilt ones).
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq cmake ninja-build libclang-dev clang llvm
+
+      - name: cargo fetch (pre-warm the registry)
+        run: cargo fetch --locked
+
+      - name: Build
+        id: build
+        env:
+          NDK_FEATURES: ${{ inputs.features }}
+          NO_DEFAULT: ${{ inputs.no_default_features }}
+        run: |
+          set -euo pipefail
+          ARGS=(build --release --locked --target armv7-linux-androideabi -p jcode)
+          if [ "${NO_DEFAULT:-true}" = "true" ]; then
+            ARGS+=(--no-default-features)
+          fi
+          if [ -n "${NDK_FEATURES:-}" ]; then
+            ARGS+=(--features "$NDK_FEATURES")
+          fi
+          echo "cargo ${ARGS[*]}"
+          # Tee so a failure is still visible in the log tail.
+          cargo "${ARGS[@]}" 2>&1 | tee /tmp/build.log
+          exit "${PIPESTATUS[0]}"
+
+      - name: Upload build log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: armv7-build-log
+          path: /tmp/build.log
+          if-no-files-found: warn
+
+      - name: Verify the ELF is 32-bit ARM
+        if: success()
+        run: |
+          set -euo pipefail
+          BIN=target/armv7-linux-androideabi/release/jcode
+          test -f "$BIN" || { echo "::error::binary not produced at $BIN"; find target -name jcode -type f | head; exit 1; }
+          file "$BIN"
+          readelf -h "$BIN"
+          echo "--- assertions ---"
+          file "$BIN" | grep -qi 'ELF 32-bit' || { echo "::error::not ELF 32-bit"; exit 1; }
+          file "$BIN" | grep -qi 'ARM'        || { echo "::error::not ARM"; exit 1; }
+          readelf -h "$BIN" | grep -qi 'ARM'  || { echo "::error::readelf does not report ARM"; exit 1; }
+          # Class must be ELF32 (not ELF64) and must NOT be aarch64.
+          readelf -h "$BIN" | grep -q 'ELF32' || { echo "::error::ELF class is not ELF32"; exit 1; }
+          if file "$BIN" | grep -qi 'aarch64'; then echo "::error::produced an aarch64 binary"; exit 1; fi
+          readelf -d "$BIN" | grep -i 'NEEDED' || true
+          echo "--- size ---"
+          ls -lh "$BIN"
+          echo "--- sha256 ---"
+          sha256sum "$BIN"
+
+      - name: Package
+        if: success()
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          cp target/armv7-linux-androideabi/release/jcode dist/jcode-armv7-linux-androideabi
+          chmod +x dist/jcode-armv7-linux-androideabi
+          ( cd dist && tar czf jcode-armv7-linux-androideabi.tar.gz jcode-armv7-linux-androideabi )
+          sha256sum dist/*
+
+      - name: Upload artifact
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: jcode-armv7-linux-androideabi
+          path: |
+            dist/jcode-armv7-linux-androideabi
+            dist/jcode-armv7-linux-androideabi.tar.gz
+          if-no-files-found: error
+
+      - name: Attach to release
+        if: success() && inputs.release_tag != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            gh release create "$TAG" --title "$TAG" --notes "jcode for 32-bit ARM Android Termux (armv7-linux-androideabi)."
+          fi
+          gh release upload "$TAG" dist/jcode-armv7-linux-androideabi.tar.gz --clobber
+          gh release upload "$TAG" dist/jcode-armv7-linux-androideabi --clobber
