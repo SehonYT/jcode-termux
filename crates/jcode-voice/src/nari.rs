@@ -334,7 +334,7 @@ impl NariSession {
             // Standalone library callers may not have initialized TLS. Preserve
             // any installed provider, otherwise use the same one as Jcode main.
             if rustls::crypto::CryptoProvider::get_default().is_none()
-                && rustls::crypto::aws_lc_rs::default_provider()
+                && rustls::crypto::ring::default_provider()
                     .install_default()
                     .is_err()
                 && rustls::crypto::CryptoProvider::get_default().is_none()

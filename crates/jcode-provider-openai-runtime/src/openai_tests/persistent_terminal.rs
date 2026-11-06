@@ -170,7 +170,7 @@ async fn persistent_terminal_public_case(
     missing_output: bool,
 ) {
     let _env_lock = jcode_base::storage::lock_test_env();
-    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+    let _ = rustls::crypto::ring::default_provider().install_default();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let _base = EnvVarGuard::set("JCODE_OPENAI_API_BASE", &format!("http://{addr}/v1"));
@@ -434,7 +434,7 @@ async fn persistent_failed_missing_tool_output_recovers_with_full_replay() {
 #[tokio::test]
 async fn fresh_ws_terminal_error_ends_stream_with_socket_open() {
     let _env_lock = jcode_base::storage::lock_test_env();
-    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+    let _ = rustls::crypto::ring::default_provider().install_default();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let _base = EnvVarGuard::set("JCODE_OPENAI_API_BASE", &format!("http://{addr}/v1"));

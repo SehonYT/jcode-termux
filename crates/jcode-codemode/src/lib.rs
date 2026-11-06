@@ -20,12 +20,13 @@ use serde_json::{Map, Value};
 use std::sync::Arc;
 use std::time::Duration;
 
-#[cfg(not(target_os = "freebsd"))]
+#[cfg(not(any(target_os = "freebsd", target_os = "android")))]
 mod engine;
 
-/// Whether this build includes the QuickJS engine. False on FreeBSD, where
-/// rquickjs has no prebuilt bindings.
-pub const AVAILABLE: bool = cfg!(not(target_os = "freebsd"));
+/// Whether this build includes the QuickJS engine. False on FreeBSD and on
+/// Android, where rquickjs has no prebuilt bindings for the 32-bit ARM ABI.
+pub const AVAILABLE: bool =
+    cfg!(not(any(target_os = "freebsd", target_os = "android")));
 
 /// A tool the script may call through `tools.<name>(args)`.
 #[derive(Debug, Clone)]
@@ -90,7 +91,7 @@ pub struct RunOutput {
 ///
 /// Must be called from within a Tokio runtime; host calls are spawned onto it.
 /// Dropping the returned future cancels the script.
-#[cfg(not(target_os = "freebsd"))]
+#[cfg(not(any(target_os = "freebsd", target_os = "android")))]
 pub async fn run(
     code: String,
     host: Arc<dyn Host>,
@@ -101,9 +102,9 @@ pub async fn run(
     engine::run(code, host, tools, store, limits).await
 }
 
-/// FreeBSD builds have no JavaScript engine. Report that instead of failing
-/// the whole build.
-#[cfg(target_os = "freebsd")]
+/// FreeBSD and Android builds have no JavaScript engine. Report that instead
+/// of failing the whole build.
+#[cfg(any(target_os = "freebsd", target_os = "android"))]
 pub async fn run(
     _code: String,
     _host: Arc<dyn Host>,
@@ -112,7 +113,14 @@ pub async fn run(
     _limits: Limits,
 ) -> RunOutput {
     RunOutput {
-        error: Some("codemode is not available on FreeBSD builds".into()),
+        error: Some(
+            if cfg!(target_os = "android") {
+                "codemode is not available on Android builds"
+            } else {
+                "codemode is not available on FreeBSD builds"
+            }
+            .into(),
+        ),
         store,
         ..RunOutput::default()
     }
@@ -131,5 +139,5 @@ pub fn decode_tool_output(text: &str) -> Value {
     Value::String(text.to_string())
 }
 
-#[cfg(all(test, not(target_os = "freebsd")))]
+#[cfg(all(test, not(any(target_os = "freebsd", target_os = "android"))))]
 mod tests;

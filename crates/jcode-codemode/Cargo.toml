@@ -21,7 +21,12 @@ tokio = { version = "1", features = ["macros", "rt", "sync", "time"] }
 
 # rquickjs-sys ships no prebuilt FreeBSD bindings, and generating them needs
 # libclang in the build VM. Codemode reports itself unavailable there instead.
-[target.'cfg(not(target_os = "freebsd"))'.dependencies]
+#
+# Termux/armv7 port: the same applies to 32-bit Android ARM. rquickjs-sys has no
+# pregenerated bindings for armv7-linux-androideabi and would need libclang plus
+# a working QuickJS C build for that ABI; codemode is an opt-in tool, so the
+# whole feature is compiled out there and reports itself unavailable instead.
+[target.'cfg(not(any(target_os = "freebsd", target_os = "android")))'.dependencies]
 rquickjs = { version = "0.14", features = ["futures"] }
 
 [dev-dependencies]

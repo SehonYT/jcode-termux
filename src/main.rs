@@ -104,7 +104,10 @@ fn main() -> Result<()> {
 
 fn run_main() -> Result<()> {
     configure_system_allocator();
-    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+    // Termux/armv7 port: use the ring provider. aws-lc-sys cannot be built for
+    // 32-bit Android ARM (no armv7-linux-androideabi pregenerated bindings, and
+    // its bundled CMake/C asm has no supported 32-bit Android configuration).
+    let _ = rustls::crypto::ring::default_provider().install_default();
 
     // SessionStart hooks should be effectively invisible to Claude Code and
     // Codex. Handle this tiny callback before the Tokio runtime and normal Jcode
