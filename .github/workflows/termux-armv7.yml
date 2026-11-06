@@ -626,7 +626,16 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     needs: build
-    if: ${{ success() && inputs.release_tag != '' }}
+    # Publish automatically. This previously required a manual workflow_dispatch
+    # with release_tag set, so every release had to be assembled by hand and the
+    # binaries were not downloadable until someone did. The four ABIs ARE the
+    # deliverable, so publishing them is part of the build.
+    #
+    # Runs on any non-PR trigger; a manual dispatch may still target an explicit
+    # tag via inputs.release_tag.
+    if: ${{ success() && github.event_name != 'pull_request' }}
+    permissions:
+      contents: write
     steps:
       - uses: actions/download-artifact@v4
         with:
@@ -638,17 +647,52 @@ jobs:
           set -euo pipefail
           ls -lR dist
 
+      - name: Resolve the release tag
+        id: tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          if [ -n "${INPUT_TAG:-}" ]; then
+            TAG="$INPUT_TAG"
+          else
+            # Rolling tag: every push to the default branch republishes the same
+            # release, so download URLs stay stable and the newest binaries are
+            # always present. Version comes from Cargo.toml, not the commit sha.
+            VER="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
+            TAG="android-v${VER}"
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "Publishing to release: $TAG"
+
       - name: Upload to release
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ inputs.release_tag }}
+          TAG: ${{ steps.tag.outputs.tag }}
+          SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
-          if ! gh release view "$TAG" >/dev/null 2>&1; then
-            gh release create "$TAG" --title "$TAG" --notes "jcode for Android/Termux: armv7-linux-androideabi, aarch64-linux-android, i686-linux-android, x86_64-linux-android."
-          fi
-          # --clobber makes reruns idempotent.
+          BODY="$(printf '%s\n' \
+            'jcode for Android / Termux - all four ABIs.' \
+            '' \
+            "Built from \`$SHA\` by workflow run $GITHUB_RUN_ID." \
+            '' \
+            '| Device | File |' \
+            '|---|---|' \
+            '| 32-bit ARM (armv8l, armeabi-v7a) | jcode-armv7-linux-androideabi.tar.gz |' \
+            '| 64-bit ARM | jcode-aarch64-linux-android.tar.gz |' \
+            '| x86 emulator (32-bit) | jcode-i686-linux-android.tar.gz |' \
+            '| x86 emulator (64-bit) | jcode-x86_64-linux-android.tar.gz |' \
+            '' \
+            'Install: https://github.com/SehonYT/jcode-termux#install')"
+          # --clobber makes reruns idempotent, so every push simply refreshes the assets.
           for f in dist/jcode-*.tar.gz dist/jcode-armv7-linux-androideabi dist/jcode-aarch64-linux-android dist/jcode-i686-linux-android dist/jcode-x86_64-linux-android; do
             [ -e "$f" ] || continue
-            gh release upload "$TAG" "$f" --clobber
+            if gh release view "$TAG" >/dev/null 2>&1; then
+              gh release upload "$TAG" "$f" --clobber
+            else
+              gh release create "$TAG" --title "jcode for Android (all ABIs)" --notes "$BODY" "$f"
+            fi
           done
+          echo "Published $TAG"
