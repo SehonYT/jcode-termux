@@ -24,7 +24,7 @@ Reference documentation for the jcode codebase.
 - Providers: `PROVIDER_DOCTOR.md`, `AWS_BEDROCK_PROVIDER.md`
 - MCP servers: `MCP_REMOTE.md`
 - Platform: `WINDOWS.md`, `TERMINAL_CAPABILITIES.md`
-- Android/Termux: `BUILD.md` (all four ABIs), `TERMUX.md` (device install), `TOOLCHAIN.md`
+- Android/Termux: [`android/`](android/README.md) — install, build matrix, hardening, tests
 
 ## Conventions
 

@@ -1,12 +1,12 @@
 # BUILD.md — Android / Termux build matrix
 
 jcode cross-compiles for **all four Android ABIs** from a single CI workflow,
-[`.github/workflows/termux-armv7.yml`](../.github/workflows/termux-armv7.yml). One matrix entry per
+[`.github/workflows/termux-armv7.yml`](../../.github/workflows/termux-armv7.yml). One matrix entry per
 ABI carries every per-target difference (NDK clang wrapper name, cargo env-var
 suffixes, expected ELF identity), so adding an ABI is one entry and no new step.
 
 For the device-side story (why the official installer fails on a 32-bit-only
-phone, how to install from a release) see [TERMUX.md](TERMUX.md). For the
+phone, how to install from a release) see [INSTALL.md](INSTALL.md). For the
 original toolchain investigation see [TOOLCHAIN.md](TOOLCHAIN.md).
 
 ## The matrix
@@ -110,18 +110,24 @@ every Android ABI (roughly +3-4 min per lane).
 
 ## Running it
 
-Manual dispatch (`workflow_dispatch`) takes `features`, `no_default_features` and
-`release_tag`. It also runs on pushes to `termux-armv7`/`termux` and on PRs that
-touch the workflow or the manifests.
+**Publishing is automatic.** A push to `master` builds all four ABIs and
+publishes them to a rolling release tagged `android-v<version>`, where the
+version comes from `Cargo.toml`. Uploads use `--clobber`, so each push simply
+refreshes the same release and the download URLs stay stable. No manual step.
 
-To attach every ABI to a release, dispatch with `release_tag` set:
+The trigger is `master` **only**, with a `paths` filter, so documentation
+changes do not spend ~15 minutes of CI and ~700 MB of artifacts. Listing several
+branches that receive the same commits would build every ABI once per branch.
+
+`workflow_dispatch` takes `features`, `no_default_features` and `release_tag`. To
+publish to an explicit tag instead of the rolling one:
 
 ```bash
-gh workflow run termux-armv7.yml -f release_tag=v0.99.1-termux
+gh workflow run termux-armv7.yml -f release_tag=v1.2.3
 ```
 
 Artifacts are named `jcode-<target>` and `jcode-<target>.tar.gz`, matching the
-release asset names in [TERMUX.md](TERMUX.md).
+release asset names in [INSTALL.md](INSTALL.md).
 
 ## Building locally (on-device, one ABI)
 

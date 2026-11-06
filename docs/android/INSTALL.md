@@ -91,7 +91,7 @@ jobs will exhaust RAM on a phone.
 ## Building in CI
 
 The cross-compile lives in
-[`.github/workflows/termux-armv7.yml`](.github/workflows/termux-armv7.yml) and now builds
+[`.github/workflows/termux-armv7.yml`](../../.github/workflows/termux-armv7.yml) and now builds
 **all four Android ABIs** — see [BUILD.md](BUILD.md) for the full matrix. It:
 
 1. **Gate 1 — dependency graph audit.** Fails fast if any crate known to be unbuildable
